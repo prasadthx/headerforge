@@ -52,7 +52,6 @@ body {
 }
 
 body {
-  width: 400px;
   font-family:
     "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
@@ -65,7 +64,11 @@ body {
 #app {
   display: flex;
   flex-direction: column;
+  /* Width drives the popup size; height is auto until the user drags to resize
+     (JS sets an explicit height then). max-height keeps us under Chrome's cap. */
+  width: 400px;
   max-height: 600px;
+  position: relative;
   /* Paint our own themed surface so transparent sections (profile bar, tabs,
      content) never fall through to the host page's background. */
   background: var(--bg);
@@ -444,7 +447,7 @@ body {
 /* ---------- Header / filter rows ---------- */
 .row {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto 1fr auto auto;
   align-items: center;
   gap: 6px;
 }
@@ -625,4 +628,196 @@ body {
 }
 .content::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ---------- Profile pills ---------- */
+.profiles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.profiles::-webkit-scrollbar {
+  height: 6px;
+}
+.profiles::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+.profilebar__ctrls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  max-width: 168px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text);
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.pill:hover {
+  border-color: var(--border-strong);
+}
+.pill.is-active {
+  color: var(--text);
+}
+.pill__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pill__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill--off {
+  opacity: 0.55;
+}
+.pill--off .pill__name {
+  text-decoration: line-through;
+}
+.pill--add {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 5px 11px;
+  color: var(--text-dim);
+}
+.pill--add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.pill__rename {
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 5px 10px;
+  width: 130px;
+  outline: none;
+}
+
+/* ---------- Header description note ---------- */
+.header-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.header-item.is-disabled .op-select,
+.header-item.is-disabled .row__pair,
+.header-item.is-disabled .row-note {
+  opacity: 0.5;
+}
+.iconbtn--sm {
+  width: 26px;
+  height: 26px;
+}
+.iconbtn--sm .iconbtn__glyph {
+  width: 15px;
+  height: 15px;
+}
+.notebtn {
+  color: var(--text-faint);
+}
+.notebtn:hover {
+  color: var(--text);
+  background: var(--bg-sunken);
+}
+.notebtn.is-active {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+.row-note {
+  padding-left: 40px;
+}
+.note-input {
+  font-size: 12px;
+}
+
+/* ---------- Panel tools (header import / export) ---------- */
+.panel-tools {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+.linkbtn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+.linkbtn:hover {
+  color: var(--accent);
+}
+.panel-tools__sep {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* ---------- Footer hint + resize grip ---------- */
+.footer {
+  padding-left: 26px;
+}
+.footer__hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.resize-grip {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: sw-resize;
+  z-index: 40;
+  opacity: 0.5;
+  background-image: linear-gradient(
+    45deg,
+    transparent 30%,
+    var(--text-faint) 30%,
+    var(--text-faint) 42%,
+    transparent 42%,
+    transparent 58%,
+    var(--text-faint) 58%,
+    var(--text-faint) 70%,
+    transparent 70%
+  );
+}
+.resize-grip:hover {
+  opacity: 1;
+}
+body.is-resizing {
+  user-select: none;
+  cursor: sw-resize;
 }

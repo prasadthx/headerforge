@@ -3,6 +3,7 @@ import {
   ERROR_KEY,
   PROFILE_COLORS,
   OPERATIONS,
+  SIZE_LIMITS,
   uid,
   makeHeader,
   makeUrlFilter,
@@ -23,6 +24,7 @@ const ICONS = {
   plus: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>',
   trash:
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9z"/></svg>',
+  note: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H9l-4 4-.01-4H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm3 5v2h10V9H7zm0 3.5V14h7v-1.5H7z"/></svg>',
 };
 
 function svgMask(svg) {
@@ -55,8 +57,8 @@ function el(tag, props = {}, children = []) {
 
 const $ = (id) => document.getElementById(id);
 const dom = {
-  profileSelect: $("profileSelect"),
-  profileDot: $("profileDot"),
+  app: $("app"),
+  profileStrip: $("profileStrip"),
   profileEnabled: $("profileEnabled"),
   profileMenu: $("profileMenu"),
   profileMenuBtn: $("profileMenuBtn"),
@@ -72,10 +74,11 @@ const dom = {
   countRequest: $("countRequest"),
   countResponse: $("countResponse"),
   countFilters: $("countFilters"),
-  addProfileBtn: $("addProfileBtn"),
   exportBtn: $("exportBtn"),
   importBtn: $("importBtn"),
   importFile: $("importFile"),
+  importHeadersFile: $("importHeadersFile"),
+  resizeGrip: $("resizeGrip"),
 };
 
 // ---------------------------------------------------------------------------
@@ -84,6 +87,7 @@ const dom = {
 let state;
 let activeTab = "request";
 let saveTimer;
+let pendingHeaderKind = "request"; // which list a header-import targets
 
 function currentProfile() {
   return (
@@ -129,12 +133,15 @@ function applyOpToPair(op, valueInput, pair) {
 }
 
 function headerRow(list, h) {
-  const row = el("div", { class: "row" + (h.enabled ? "" : " row--disabled") });
+  const item = el("div", {
+    class: "header-item" + (h.enabled ? "" : " is-disabled"),
+  });
+  const row = el("div", { class: "row" });
   row.dataset.id = h.id;
 
   const toggle = makeSwitch(h.enabled, (checked) => {
     h.enabled = checked;
-    row.classList.toggle("row--disabled", !checked);
+    item.classList.toggle("is-disabled", !checked);
     save();
   });
   toggle.classList.add("row__toggle");
@@ -168,11 +175,40 @@ function headerRow(list, h) {
 
   const pair = el("div", { class: "row__pair" }, [nameInput, valueInput]);
   applyOpToPair(h.operation, valueInput, pair);
-
   op.addEventListener("change", () => {
     h.operation = op.value;
     applyOpToPair(op.value, valueInput, pair);
     save();
+  });
+
+  // Description / note (metadata only — never sent as a real header).
+  const noteInput = el("input", {
+    class: "field note-input",
+    value: h.description || "",
+    placeholder: "Description — what this header is for (optional)",
+    spellcheck: false,
+    autocomplete: "off",
+  });
+  noteInput.addEventListener("input", () => {
+    h.description = noteInput.value;
+    noteBtn.classList.toggle("is-active", noteInput.value.length > 0);
+    save();
+  });
+  const noteLine = el("div", { class: "row-note" }, [noteInput]);
+  const hasNote = (h.description || "").length > 0;
+  noteLine.hidden = !hasNote;
+
+  const noteBtn = el("button", {
+    class: "iconbtn iconbtn--sm notebtn" + (hasNote ? " is-active" : ""),
+    title: "Add a description",
+  }, [glyph("note")]);
+  noteBtn.addEventListener("click", () => {
+    noteLine.hidden = !noteLine.hidden;
+    if (!noteLine.hidden) noteInput.focus();
+    noteBtn.classList.toggle(
+      "is-active",
+      !noteLine.hidden || (h.description || "").length > 0,
+    );
   });
 
   const del = el("button", { class: "delbtn", title: "Remove header" }, [
@@ -185,8 +221,9 @@ function headerRow(list, h) {
     renderPanels();
   });
 
-  row.append(toggle, op, pair, del);
-  return row;
+  row.append(toggle, op, pair, noteBtn, del);
+  item.append(row, noteLine);
+  return item;
 }
 
 function filterRow(list, f) {
@@ -263,21 +300,41 @@ function renderPanels() {
   dom.countFilters.textContent = p.urlFilters.length;
 }
 
-function renderProfileBar() {
-  dom.profileSelect.textContent = "";
+function renderProfiles() {
+  dom.profileStrip.textContent = "";
   for (const p of state.profiles) {
-    dom.profileSelect.append(
-      el("option", {
-        value: p.id,
-        textContent: p.name + (p.enabled ? "" : "  ·  off"),
-      }),
-    );
+    const active = p.id === state.selectedProfileId;
+    const pill = el("button", {
+      class:
+        "pill" + (active ? " is-active" : "") + (p.enabled ? "" : " pill--off"),
+      title: p.enabled ? p.name : `${p.name} (disabled)`,
+    });
+    const dot = el("span", { class: "pill__dot" });
+    dot.style.background = p.color;
+    const name = el("span", { class: "pill__name", textContent: p.name });
+    pill.append(dot, name);
+    if (active) {
+      pill.style.borderColor = p.color;
+      pill.style.background = `color-mix(in srgb, ${p.color} 14%, var(--bg-elev))`;
+    }
+    pill.addEventListener("click", () => selectProfile(p.id));
+    pill.addEventListener("dblclick", () => {
+      if (p.id === state.selectedProfileId) startRename(pill, name);
+    });
+    dom.profileStrip.append(pill);
   }
-  dom.profileSelect.value = state.selectedProfileId;
-  const cur = currentProfile();
-  dom.profileDot.style.background = cur.color;
-  dom.profileDot.style.boxShadow = `0 0 0 3px color-mix(in srgb, ${cur.color} 25%, transparent)`;
-  dom.profileEnabled.checked = cur.enabled;
+
+  const add = el("button", {
+    class: "pill pill--add",
+    title: "New profile",
+    textContent: "+",
+  });
+  add.addEventListener("click", addProfile);
+  dom.profileStrip.append(add);
+
+  dom.profileEnabled.checked = currentProfile().enabled;
+  const activePill = dom.profileStrip.querySelector(".pill.is-active");
+  if (activePill) activePill.scrollIntoView({ inline: "nearest", block: "nearest" });
 }
 
 function renderColors() {
@@ -292,7 +349,7 @@ function renderColors() {
     s.addEventListener("click", () => {
       p.color = c;
       save();
-      renderProfileBar();
+      renderProfiles();
       renderColors();
     });
     dom.colorPicker.append(s);
@@ -320,10 +377,77 @@ function renderErrors(errors) {
 }
 
 function renderAll() {
-  renderProfileBar();
+  renderProfiles();
   renderPanels();
   renderColors();
   renderPausedUI();
+}
+
+// ---------------------------------------------------------------------------
+// Popup size (drag to resize).
+// ---------------------------------------------------------------------------
+function applySize() {
+  dom.app.style.width = state.popupWidth + "px";
+  dom.app.style.height = state.popupHeight ? state.popupHeight + "px" : "";
+}
+
+function wireResize() {
+  const grip = dom.resizeGrip;
+  let startX = 0;
+  let startY = 0;
+  let startW = 0;
+  let startH = 0;
+
+  const onMove = (e) => {
+    // Popup is anchored top-right, so it grows down/left. Screen coords avoid a
+    // feedback loop as the popup's own left edge moves during the drag.
+    const w = clamp(
+      startW + (startX - e.screenX),
+      SIZE_LIMITS.minWidth,
+      SIZE_LIMITS.maxWidth,
+    );
+    const h = clamp(
+      startH + (e.screenY - startY),
+      SIZE_LIMITS.minHeight,
+      SIZE_LIMITS.maxHeight,
+    );
+    state.popupWidth = Math.round(w);
+    state.popupHeight = Math.round(h);
+    dom.app.style.width = w + "px";
+    dom.app.style.height = h + "px";
+  };
+  const onUp = (e) => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.body.classList.remove("is-resizing");
+    if (grip.releasePointerCapture) {
+      try {
+        grip.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+    }
+    save({ immediate: true });
+  };
+
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    startX = e.screenX;
+    startY = e.screenY;
+    const rect = dom.app.getBoundingClientRect();
+    startW = rect.width;
+    startH = rect.height;
+    if (grip.setPointerCapture) {
+      try {
+        grip.setPointerCapture(e.pointerId);
+      } catch (_) {}
+    }
+    document.body.classList.add("is-resizing");
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  });
+}
+
+function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +491,18 @@ function setActiveTab(name) {
 // ---------------------------------------------------------------------------
 function closeMenu() {
   dom.profileMenu.hidden = true;
+}
+
+function selectProfile(id) {
+  closeMenu();
+  // Skip re-selecting the active profile so the pill DOM node survives a
+  // double-click (which we use to trigger inline rename).
+  if (id === state.selectedProfileId) return;
+  state.selectedProfileId = id;
+  save();
+  renderProfiles();
+  renderPanels();
+  setActiveTab(activeTab);
 }
 
 function addItem(kind) {
@@ -426,16 +562,22 @@ function deleteCurrentProfile() {
   renderAll();
 }
 
-function startRename() {
+function renameActiveProfile() {
   closeMenu();
+  const pill = dom.profileStrip.querySelector(".pill.is-active");
+  const label = pill && pill.querySelector(".pill__name");
+  if (pill && label) startRename(pill, label);
+}
+
+function startRename(pill, label) {
   const p = currentProfile();
   const input = el("input", {
-    class: "profile-select",
+    class: "pill__rename",
     value: p.name,
     spellcheck: false,
   });
-  dom.profileSelect.style.display = "none";
-  dom.profileSelect.after(input);
+  input.addEventListener("click", (e) => e.stopPropagation());
+  label.replaceWith(input);
   input.focus();
   input.select();
   let done = false;
@@ -446,9 +588,7 @@ function startRename() {
       p.name = input.value.trim() || p.name;
       save();
     }
-    input.remove();
-    dom.profileSelect.style.display = "";
-    renderProfileBar();
+    renderProfiles();
   };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -464,22 +604,30 @@ function startRename() {
 // ---------------------------------------------------------------------------
 // Import / export.
 // ---------------------------------------------------------------------------
-function exportProfiles() {
-  const payload = {
-    app: "HeaderForge",
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    profiles: state.profiles,
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
-  });
+function download(filename, text) {
+  const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
-  const a = el("a", { href: url, download: "headerforge-profiles.json" });
+  const a = el("a", { href: url, download: filename });
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportProfiles() {
+  download(
+    "headerforge-profiles.json",
+    JSON.stringify(
+      {
+        app: "HeaderForge",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        profiles: state.profiles,
+      },
+      null,
+      2,
+    ),
+  );
   toast("Exported profiles");
 }
 
@@ -531,6 +679,83 @@ async function importProfilesFromFile(file) {
   toast(`Imported ${cleaned.length} profile${cleaned.length === 1 ? "" : "s"}`);
 }
 
+// Parse a variety of "headers as JSON" shapes into normalized header objects:
+//   - an array of { name, value, operation?, enabled?, description? }
+//   - { headers: [...] } / { requestHeaders: [...] } / { responseHeaders: [...] }
+//   - a plain object mapping header name -> value
+function parseHeadersJson(data) {
+  let arr = null;
+  if (Array.isArray(data)) {
+    arr = data;
+  } else if (data && typeof data === "object") {
+    if (Array.isArray(data.headers)) arr = data.headers;
+    else if (Array.isArray(data.requestHeaders)) arr = data.requestHeaders;
+    else if (Array.isArray(data.responseHeaders)) arr = data.responseHeaders;
+    else {
+      arr = Object.entries(data).map(([k, v]) => ({
+        name: k,
+        value: typeof v === "string" ? v : JSON.stringify(v),
+      }));
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map((h) => {
+      if (!h || typeof h !== "object") return null;
+      const name = String(h.name || h.header || "").trim();
+      if (!name) return null;
+      const hd = makeHeader(
+        name,
+        String(h.value ?? ""),
+        OPERATIONS.includes(h.operation) ? h.operation : "set",
+        String(h.description || h.comment || ""),
+      );
+      hd.enabled = h.enabled !== false;
+      return hd;
+    })
+    .filter(Boolean);
+}
+
+async function importHeadersFromFile(file, kind) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    toast("Invalid JSON file");
+    return;
+  }
+  const headers = parseHeadersJson(data);
+  if (headers.length === 0) {
+    toast("No headers found in file");
+    return;
+  }
+  const p = currentProfile();
+  const list = kind === "response" ? p.responseHeaders : p.requestHeaders;
+  list.push(...headers);
+  save({ immediate: true });
+  setActiveTab(kind);
+  renderPanels();
+  toast(`Imported ${headers.length} header${headers.length === 1 ? "" : "s"}`);
+}
+
+function exportHeaders(kind) {
+  const p = currentProfile();
+  const list = kind === "response" ? p.responseHeaders : p.requestHeaders;
+  if (list.length === 0) {
+    toast("No headers to export");
+    return;
+  }
+  const payload = list.map((h) => ({
+    enabled: h.enabled,
+    name: h.name,
+    value: h.value,
+    operation: h.operation,
+    description: h.description || "",
+  }));
+  download(`headerforge-${kind}-headers.json`, JSON.stringify(payload, null, 2));
+  toast(`Exported ${list.length} header${list.length === 1 ? "" : "s"}`);
+}
+
 // ---------------------------------------------------------------------------
 // Toast.
 // ---------------------------------------------------------------------------
@@ -563,16 +788,10 @@ function wire() {
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
 
-  dom.profileSelect.addEventListener("change", () => {
-    state.selectedProfileId = dom.profileSelect.value;
-    save();
-    renderAll();
-    setActiveTab(activeTab);
-  });
   dom.profileEnabled.addEventListener("change", () => {
     currentProfile().enabled = dom.profileEnabled.checked;
     save();
-    renderProfileBar();
+    renderProfiles();
   });
 
   dom.profileMenuBtn.addEventListener("click", (e) => {
@@ -592,7 +811,7 @@ function wire() {
 
   dom.profileMenu
     .querySelector('[data-action="rename"]')
-    .addEventListener("click", startRename);
+    .addEventListener("click", renameActiveProfile);
   dom.profileMenu
     .querySelector('[data-action="clone"]')
     .addEventListener("click", cloneProfile);
@@ -622,13 +841,28 @@ function wire() {
     closeMenu();
   });
 
-  dom.addProfileBtn.addEventListener("click", addProfile);
   dom.exportBtn.addEventListener("click", exportProfiles);
   dom.importBtn.addEventListener("click", () => dom.importFile.click());
   dom.importFile.addEventListener("change", async () => {
     const file = dom.importFile.files[0];
     if (file) await importProfilesFromFile(file);
     dom.importFile.value = "";
+  });
+
+  // Per-panel header import / export.
+  document.querySelectorAll("[data-himport]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      pendingHeaderKind = btn.dataset.himport;
+      dom.importHeadersFile.click();
+    });
+  });
+  document.querySelectorAll("[data-hexport]").forEach((btn) => {
+    btn.addEventListener("click", () => exportHeaders(btn.dataset.hexport));
+  });
+  dom.importHeadersFile.addEventListener("change", async () => {
+    const file = dom.importHeadersFile.files[0];
+    if (file) await importHeadersFromFile(file, pendingHeaderKind);
+    dom.importHeadersFile.value = "";
   });
 
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -642,14 +876,14 @@ function wire() {
     if (state.theme === "system") applyTheme();
   });
 
-  // Surface rule-build errors reported by the background worker.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes[ERROR_KEY]) {
       renderErrors(changes[ERROR_KEY].newValue);
     }
   });
 
-  // Flush any debounced edit before the popup goes away.
+  wireResize();
+
   window.addEventListener("pagehide", flush);
   window.addEventListener("blur", () => save({ immediate: true }));
 }
@@ -667,6 +901,7 @@ async function init() {
     await chrome.storage.local.set({ [STORAGE_KEY]: state });
   }
   applyTheme();
+  applySize();
   wire();
   renderAll();
   setActiveTab("request");

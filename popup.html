@@ -38,14 +38,11 @@
       <!-- Error banner -->
       <div id="errorBanner" class="banner banner--error" hidden></div>
 
-      <!-- Profile row -->
+      <!-- Profile row: scrollable pill switcher + active-profile controls -->
       <section class="profilebar">
-        <div class="profilebar__left">
-          <span class="profile-dot" id="profileDot"></span>
-          <select id="profileSelect" class="profile-select" title="Active profile"></select>
-        </div>
-        <div class="profilebar__right">
-          <label class="switch" title="Enable this profile">
+        <div class="profiles" id="profileStrip"><!-- pills injected --></div>
+        <div class="profilebar__ctrls">
+          <label class="switch switch--sm" title="Enable this profile">
             <input type="checkbox" id="profileEnabled" />
             <span class="switch__track"><span class="switch__thumb"></span></span>
           </label>
@@ -82,11 +79,21 @@
         <section class="panel is-active" data-panel="request">
           <div class="rows" id="requestRows"></div>
           <button class="addrow" data-add="request">+ Add request header</button>
+          <div class="panel-tools">
+            <button class="linkbtn" data-himport="request">Import headers…</button>
+            <span class="panel-tools__sep">·</span>
+            <button class="linkbtn" data-hexport="request">Export headers</button>
+          </div>
         </section>
 
         <section class="panel" data-panel="response">
           <div class="rows" id="responseRows"></div>
           <button class="addrow" data-add="response">+ Add response header</button>
+          <div class="panel-tools">
+            <button class="linkbtn" data-himport="response">Import headers…</button>
+            <span class="panel-tools__sep">·</span>
+            <button class="linkbtn" data-hexport="response">Export headers</button>
+          </div>
         </section>
 
         <section class="panel" data-panel="filters">
@@ -101,9 +108,7 @@
 
       <!-- Footer -->
       <footer class="footer">
-        <button id="addProfileBtn" class="footer__btn" title="New profile">
-          <span class="iconbtn__glyph" data-icon="plus"></span> Profile
-        </button>
+        <span class="footer__hint">All profiles</span>
         <div class="footer__spacer"></div>
         <button id="exportBtn" class="footer__btn" title="Export all profiles as JSON">
           Export
@@ -111,9 +116,14 @@
         <button id="importBtn" class="footer__btn" title="Import profiles from JSON">
           Import
         </button>
-        <input id="importFile" type="file" accept="application/json,.json" hidden />
       </footer>
+
+      <!-- Drag-to-resize grip (bottom-left, since the popup is anchored top-right) -->
+      <div id="resizeGrip" class="resize-grip" title="Drag to resize"></div>
     </div>
+
+    <input id="importFile" type="file" accept="application/json,.json" hidden />
+    <input id="importHeadersFile" type="file" accept="application/json,.json" hidden />
 
     <script type="module" src="popup.js"></script>
   </body>

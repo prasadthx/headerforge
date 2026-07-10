@@ -6,6 +6,7 @@ import {
   makeHeader,
   makeProfile,
   makeUrlFilter,
+  SIZE_LIMITS,
 } from "../state.js";
 import {
   compileRules,
@@ -214,7 +215,40 @@ test("normalizeState coerces partial profiles safely", () => {
   const h = s.profiles[0].requestHeaders[0];
   assert.equal(h.operation, "set"); // defaulted
   assert.equal(h.enabled, true); // defaulted
+  assert.equal(h.description, ""); // defaulted
   assert.ok(typeof h.id === "string" && h.id.length > 0); // id assigned
+});
+
+test("normalizeState maps a ModHeader-style comment to description", () => {
+  const s = normalizeState({
+    profiles: [{ name: "P", requestHeaders: [{ name: "H", comment: "note" }] }],
+  });
+  assert.equal(s.profiles[0].requestHeaders[0].description, "note");
+});
+
+test("description metadata never leaks into the compiled DNR rule", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [makeHeader("X-Api", "1", "set", "my api key header")],
+      }),
+    ],
+  };
+  const rules = compileRules(state, {});
+  assert.deepEqual(rules[0].action.requestHeaders, [
+    { header: "X-Api", operation: "set", value: "1" },
+  ]);
+  assert.ok(!("description" in rules[0].action.requestHeaders[0]));
+});
+
+test("normalizeState clamps popup size and defaults height to null", () => {
+  const s = normalizeState({ profiles: [], popupWidth: 99999 });
+  assert.equal(s.popupWidth, SIZE_LIMITS.maxWidth);
+  assert.equal(s.popupHeight, null);
+  const s2 = normalizeState({ profiles: [], popupWidth: 10, popupHeight: 10 });
+  assert.equal(s2.popupWidth, SIZE_LIMITS.minWidth);
+  assert.equal(s2.popupHeight, SIZE_LIMITS.minHeight);
 });
 
 console.log(`\n${passed} tests passed`);

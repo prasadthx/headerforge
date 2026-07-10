@@ -20,7 +20,9 @@
         min-height: 100vh;
       }
       #frame {
-        width: 400px;
+        /* Wrap the app so drag-to-resize (which sets the app width) is visible
+           in the preview too. */
+        width: max-content;
         border-radius: 12px;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
         overflow: hidden;
@@ -54,8 +56,8 @@
               enabled: true,
               color: "#6366f1",
               requestHeaders: [
-                { id: "h1", enabled: true, name: "x-auth-override", value: "user@example.com", operation: "set" },
-                { id: "h2", enabled: true, name: "Authorization", value: "Bearer eyJhbGciOi…", operation: "set" },
+                { id: "h1", enabled: true, name: "x-auth-override", value: "user@example.com", operation: "set", description: "Impersonate this user in staging" },
+                { id: "h2", enabled: true, name: "Authorization", value: "Bearer eyJhbGciOi…", operation: "set", description: "Service-account bearer token" },
                 { id: "h3", enabled: true, name: "X-Debug", value: "1", operation: "append" },
                 { id: "h4", enabled: false, name: "Referer", value: "", operation: "remove" },
               ],

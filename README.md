@@ -16,13 +16,20 @@ everything stays in your browser.
 - **Request & response headers** — set, append, or remove any header.
 - **Per-header operation** — a `set` / `append` / `remove` selector on every row
   (clearer than juggling separate "modify" vs "filter" lists).
-- **Multiple profiles** — colour-coded, individually toggleable, duplicate in one
-  click.
+- **Per-header descriptions** — annotate what each header is for via an
+  expandable note. Metadata only — it's never sent as a real header.
+- **Profile switcher** — a scrollable strip of colour-coded pills; click to
+  switch, double-click to rename, `+` to add. Each profile toggles on/off
+  independently and can be duplicated.
 - **URL filters** — scope a profile to URLs matching a regular expression;
   invalid patterns are flagged instead of silently breaking everything.
+- **Import headers from JSON** — per panel; accepts a headers array *or* a plain
+  `{ "Header-Name": "value" }` object, appended to the current profile.
+- **Resizable popup** — drag the bottom-left grip to size it; the dimensions are
+  remembered next time you open it.
 - **One-tap pause** — disable all headers globally without losing your setup.
-- **Import / export** — JSON round-trips; import also understands ModHeader-style
-  exports (request/response headers + URL filters).
+- **Import / export profiles** — JSON round-trips; import also understands
+  ModHeader-style exports (request/response headers + URL filters).
 - **Light / dark / system theme.**
 - **Private by design** — no network calls, no analytics. Your headers never
   leave your machine.

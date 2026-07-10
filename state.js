@@ -40,13 +40,24 @@ export const RESOURCE_TYPES = [
 
 export const OPERATIONS = ["set", "append", "remove"];
 
+// Popup resize bounds. Chrome caps extension popups at ~800x600, so we stay
+// under that to avoid the browser clipping or adding its own scrollbar.
+export const SIZE_LIMITS = {
+  minWidth: 320,
+  maxWidth: 780,
+  minHeight: 320,
+  maxHeight: 590,
+  defaultWidth: 400,
+  defaultHeight: 520,
+};
+
 export function uid() {
   // crypto.randomUUID is available in both popup and service-worker contexts.
   return crypto.randomUUID();
 }
 
-export function makeHeader(name = "", value = "", operation = "set") {
-  return { id: uid(), enabled: true, name, value, operation };
+export function makeHeader(name = "", value = "", operation = "set", description = "") {
+  return { id: uid(), enabled: true, name, value, operation, description };
 }
 
 export function makeUrlFilter(pattern = "") {
@@ -71,9 +82,17 @@ export function createDefaultState() {
     version: 1,
     paused: false,
     theme: "system", // "system" | "light" | "dark"
+    popupWidth: SIZE_LIMITS.defaultWidth,
+    popupHeight: null, // null = auto-height until the user drags to resize
     selectedProfileId: profile.id,
     profiles: [profile],
   };
+}
+
+function clampSize(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
 }
 
 // Defensive normalization so older/partial/imported blobs never crash the UI.
@@ -106,6 +125,21 @@ export function normalizeState(raw) {
     version: 1,
     paused: Boolean(raw.paused),
     theme: ["system", "light", "dark"].includes(raw.theme) ? raw.theme : "system",
+    popupWidth: clampSize(
+      raw.popupWidth,
+      SIZE_LIMITS.minWidth,
+      SIZE_LIMITS.maxWidth,
+      SIZE_LIMITS.defaultWidth,
+    ),
+    popupHeight:
+      raw.popupHeight == null
+        ? null
+        : clampSize(
+            raw.popupHeight,
+            SIZE_LIMITS.minHeight,
+            SIZE_LIMITS.maxHeight,
+            SIZE_LIMITS.defaultHeight,
+          ),
     selectedProfileId: selected,
     profiles,
   };
@@ -121,6 +155,12 @@ function normalizeHeaders(arr) {
       name: typeof h.name === "string" ? h.name : "",
       value: typeof h.value === "string" ? h.value : "",
       operation: OPERATIONS.includes(h.operation) ? h.operation : "set",
+      description:
+        typeof h.description === "string"
+          ? h.description
+          : typeof h.comment === "string"
+            ? h.comment
+            : "",
     }));
 }
 
