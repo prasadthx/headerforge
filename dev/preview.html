@@ -8,16 +8,21 @@
     <link rel="stylesheet" href="popup.css" />
     <title>HeaderForge — Preview</title>
     <style>
-      /* The real popup is sized by the browser chrome; give it a frame here. */
+      /* The real popup is sized by the browser chrome; give it a themed "desk"
+         and frame here. Using a theme variable keeps the preview consistent in
+         both light and dark mode. */
       body {
-        background: #e2e8f0;
+        background: var(--bg-sunken);
         display: flex;
         justify-content: center;
-        padding: 0;
+        align-items: flex-start;
+        padding: 24px 12px;
+        min-height: 100vh;
       }
       #frame {
         width: 400px;
-        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
         overflow: hidden;
       }
     </style>

@@ -66,6 +66,10 @@ body {
   display: flex;
   flex-direction: column;
   max-height: 600px;
+  /* Paint our own themed surface so transparent sections (profile bar, tabs,
+     content) never fall through to the host page's background. */
+  background: var(--bg);
+  color: var(--text);
 }
 
 /* ---------- Top bar ---------- */
