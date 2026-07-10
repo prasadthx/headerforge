@@ -43,6 +43,21 @@ To update later, `git pull` and hit the **Reload** button on the extension card.
 > **Firefox note:** Firefox uses a slightly different MV3 dynamic-rules surface.
 > This build targets Chromium; a Firefox port is a possible future addition.
 
+## Preview the UI without installing
+
+Just want a quick look? A dev preview stubs the browser APIs so the **real**
+popup runs in a normal browser tab. From the repo root:
+
+```bash
+python3 -m http.server 8099
+```
+
+Then open <http://localhost:8099/dev/preview.html> (append `?theme=dark` for dark
+mode). It's seeded with a demo profile and is fully interactive. This file lives
+in `dev/` and is **not** part of the shipped extension. Header modification only
+works for real once loaded as an extension (below) — the preview just renders the
+interface.
+
 ## Usage
 
 1. Click the toolbar icon.

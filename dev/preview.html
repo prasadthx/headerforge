@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Resolve all relative paths against the extension root, one level up. -->
+    <base href="../" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>HeaderForge — Preview</title>
+    <style>
+      /* The real popup is sized by the browser chrome; give it a frame here. */
+      body {
+        background: #e2e8f0;
+        display: flex;
+        justify-content: center;
+        padding: 0;
+      }
+      #frame {
+        width: 400px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+        overflow: hidden;
+      }
+    </style>
+    <!--
+      Dev-only preview. This file is NOT part of the shipped extension; it lets
+      you open the popup UI in a normal browser tab by stubbing the chrome.*
+      APIs the popup relies on (storage, declarativeNetRequest, action, runtime)
+      with in-memory equivalents, seeded with a demo profile.
+
+      Run a static server from the repo root and open this file, e.g.:
+        python3 -m http.server 8099
+        open http://localhost:8099/dev/preview.html      (?theme=dark also works)
+    -->
+    <script>
+      (function () {
+        const STORAGE_KEY = "headerforge:v1";
+        const params = new URLSearchParams(location.search);
+        const theme = params.get("theme") || "light";
+
+        const demo = {
+          version: 1,
+          paused: false,
+          theme,
+          selectedProfileId: "p1",
+          profiles: [
+            {
+              id: "p1",
+              name: "Auth testing",
+              enabled: true,
+              color: "#6366f1",
+              requestHeaders: [
+                { id: "h1", enabled: true, name: "x-auth-override", value: "user@example.com", operation: "set" },
+                { id: "h2", enabled: true, name: "Authorization", value: "Bearer eyJhbGciOi…", operation: "set" },
+                { id: "h3", enabled: true, name: "X-Debug", value: "1", operation: "append" },
+                { id: "h4", enabled: false, name: "Referer", value: "", operation: "remove" },
+              ],
+              responseHeaders: [],
+              urlFilters: [{ id: "f1", enabled: true, pattern: ".*\\.bstackstaging\\.com/.*" }],
+            },
+            {
+              id: "p2",
+              name: "CORS bypass",
+              enabled: false,
+              color: "#ec4899",
+              requestHeaders: [],
+              responseHeaders: [
+                { id: "h5", enabled: true, name: "Access-Control-Allow-Origin", value: "*", operation: "set" },
+              ],
+              urlFilters: [],
+            },
+          ],
+        };
+
+        const listeners = [];
+        let store = { [STORAGE_KEY]: demo };
+
+        window.chrome = {
+          storage: {
+            local: {
+              async get(keys) {
+                if (keys == null) return { ...store };
+                const arr = Array.isArray(keys) ? keys : [keys];
+                const out = {};
+                for (const k of arr) if (k in store) out[k] = store[k];
+                return out;
+              },
+              async set(obj) {
+                const changes = {};
+                for (const k in obj) {
+                  changes[k] = { oldValue: store[k], newValue: obj[k] };
+                  store[k] = obj[k];
+                }
+                listeners.forEach((fn) => fn(changes, "local"));
+              },
+            },
+            onChanged: { addListener: (fn) => listeners.push(fn) },
+          },
+          runtime: {
+            onMessage: { addListener() {} },
+            onInstalled: { addListener() {} },
+            onStartup: { addListener() {} },
+            async sendMessage() {},
+          },
+          action: {
+            async setBadgeText() {},
+            async setBadgeBackgroundColor() {},
+            async setTitle() {},
+          },
+          declarativeNetRequest: {
+            async getDynamicRules() {
+              return [];
+            },
+            async updateDynamicRules() {},
+            async isRegexSupported() {
+              return { isSupported: true };
+            },
+          },
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="frame"></div>
+    <script type="module">
+      // Pull in the real popup markup and boot the real popup.js against it, so
+      // this preview never drifts from the shipped UI.
+      const txt = await (await fetch("popup.html")).text();
+      const parsedBody = new DOMParser().parseFromString(txt, "text/html").body;
+      parsedBody.querySelectorAll("script").forEach((s) => s.remove());
+      document.getElementById("frame").innerHTML = parsedBody.innerHTML;
+
+      const s = document.createElement("script");
+      s.type = "module";
+      s.src = "popup.js";
+      document.body.appendChild(s);
+    </script>
+  </body>
+</html>
