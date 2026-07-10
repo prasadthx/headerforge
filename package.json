@@ -1,0 +1,12 @@
+{
+  "name": "headerforge",
+  "version": "1.0.0",
+  "description": "A fast, modern, open-source HTTP header modifier browser extension (ModHeader alternative).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tools/test-rules.mjs",
+    "icons": "python3 tools/gen-icons.py"
+  },
+  "license": "MIT"
+}

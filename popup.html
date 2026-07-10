@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>HeaderForge</title>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="brand">
+          <img src="icons/icon48.png" alt="" class="brand__logo" width="22" height="22" />
+          <span class="brand__name">HeaderForge</span>
+        </div>
+        <div class="topbar__actions">
+          <button
+            id="pauseBtn"
+            class="iconbtn"
+            title="Pause all headers"
+            aria-pressed="false"
+          >
+            <span class="iconbtn__glyph" data-icon="pause"></span>
+          </button>
+          <button id="themeBtn" class="iconbtn" title="Toggle theme">
+            <span class="iconbtn__glyph" data-icon="theme"></span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Paused banner -->
+      <div id="pausedBanner" class="banner banner--paused" hidden>
+        <span>All headers paused</span>
+        <button id="resumeBtn" class="banner__action">Resume</button>
+      </div>
+
+      <!-- Error banner -->
+      <div id="errorBanner" class="banner banner--error" hidden></div>
+
+      <!-- Profile row -->
+      <section class="profilebar">
+        <div class="profilebar__left">
+          <span class="profile-dot" id="profileDot"></span>
+          <select id="profileSelect" class="profile-select" title="Active profile"></select>
+        </div>
+        <div class="profilebar__right">
+          <label class="switch" title="Enable this profile">
+            <input type="checkbox" id="profileEnabled" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </label>
+          <button id="profileMenuBtn" class="iconbtn" title="Profile actions">
+            <span class="iconbtn__glyph" data-icon="more"></span>
+          </button>
+        </div>
+        <!-- Profile action menu -->
+        <div id="profileMenu" class="menu" hidden>
+          <button class="menu__item" data-action="rename">Rename profile</button>
+          <button class="menu__item" data-action="clone">Duplicate profile</button>
+          <div class="menu__colors" id="colorPicker"></div>
+          <button class="menu__item menu__item--danger" data-action="delete">
+            Delete profile
+          </button>
+        </div>
+      </section>
+
+      <!-- Tabs -->
+      <nav class="tabs" role="tablist">
+        <button class="tab is-active" data-tab="request" role="tab">
+          Request <span class="tab__count" id="countRequest">0</span>
+        </button>
+        <button class="tab" data-tab="response" role="tab">
+          Response <span class="tab__count" id="countResponse">0</span>
+        </button>
+        <button class="tab" data-tab="filters" role="tab">
+          URL Filters <span class="tab__count" id="countFilters">0</span>
+        </button>
+      </nav>
+
+      <!-- Panels -->
+      <main class="content">
+        <section class="panel is-active" data-panel="request">
+          <div class="rows" id="requestRows"></div>
+          <button class="addrow" data-add="request">+ Add request header</button>
+        </section>
+
+        <section class="panel" data-panel="response">
+          <div class="rows" id="responseRows"></div>
+          <button class="addrow" data-add="response">+ Add response header</button>
+        </section>
+
+        <section class="panel" data-panel="filters">
+          <p class="hint">
+            Limit this profile to URLs matching a regular expression. Leave empty
+            to apply to every request.
+          </p>
+          <div class="rows" id="filterRows"></div>
+          <button class="addrow" data-add="filter">+ Add URL filter</button>
+        </section>
+      </main>
+
+      <!-- Footer -->
+      <footer class="footer">
+        <button id="addProfileBtn" class="footer__btn" title="New profile">
+          <span class="iconbtn__glyph" data-icon="plus"></span> Profile
+        </button>
+        <div class="footer__spacer"></div>
+        <button id="exportBtn" class="footer__btn" title="Export all profiles as JSON">
+          Export
+        </button>
+        <button id="importBtn" class="footer__btn" title="Import profiles from JSON">
+          Import
+        </button>
+        <input id="importFile" type="file" accept="application/json,.json" hidden />
+      </footer>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

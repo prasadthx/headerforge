@@ -1,0 +1,220 @@
+// Unit tests for the pure rule-compilation logic. Run: npm test
+import assert from "node:assert/strict";
+import {
+  createDefaultState,
+  normalizeState,
+  makeHeader,
+  makeProfile,
+  makeUrlFilter,
+} from "../state.js";
+import {
+  compileRules,
+  headerActions,
+  countActiveHeaders,
+} from "../rules.js";
+
+let passed = 0;
+function test(name, fn) {
+  fn();
+  passed++;
+  console.log("  ok  " + name);
+}
+
+// Assert a compiled rule is structurally valid for declarativeNetRequest.
+function assertValidRule(rule) {
+  assert.equal(typeof rule.id, "number");
+  assert.ok(rule.id > 0, "rule id must be positive");
+  assert.equal(rule.priority, 1);
+  assert.equal(rule.action.type, "modifyHeaders");
+  assert.equal(typeof rule.condition, "object");
+  assert.ok(Array.isArray(rule.condition.resourceTypes));
+  assert.ok(rule.condition.resourceTypes.includes("main_frame"));
+  const items = [
+    ...(rule.action.requestHeaders || []),
+    ...(rule.action.responseHeaders || []),
+  ];
+  assert.ok(items.length > 0, "rule must modify at least one header");
+  for (const it of items) {
+    assert.ok(typeof it.header === "string" && it.header.length > 0);
+    assert.ok(["set", "append", "remove"].includes(it.operation));
+    if (it.operation === "remove") {
+      assert.ok(!("value" in it), "remove must not carry a value");
+    } else {
+      assert.equal(typeof it.value, "string");
+    }
+  }
+}
+
+function profileWith(overrides) {
+  const p = makeProfile("Test", 0);
+  return { ...p, ...overrides };
+}
+
+// ---------------------------------------------------------------------------
+
+test("default state compiles to zero rules (empty header dropped)", () => {
+  const rules = compileRules(createDefaultState(), {});
+  assert.deepEqual(rules, []);
+});
+
+test("a single set request header yields one valid rule", () => {
+  const state = {
+    paused: false,
+    selectedProfileId: "a",
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [makeHeader("X-Test", "1", "set")],
+      }),
+    ],
+  };
+  const rules = compileRules(state, {});
+  assert.equal(rules.length, 1);
+  assertValidRule(rules[0]);
+  assert.deepEqual(rules[0].action.requestHeaders, [
+    { header: "X-Test", operation: "set", value: "1" },
+  ]);
+  assert.ok(!("responseHeaders" in rules[0].action));
+  assert.ok(!("regexFilter" in rules[0].condition));
+});
+
+test("remove operation carries no value", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [makeHeader("X-Remove-Me", "ignored", "remove")],
+      }),
+    ],
+  };
+  const rules = compileRules(state, {});
+  assertValidRule(rules[0]);
+  assert.deepEqual(rules[0].action.requestHeaders, [
+    { header: "X-Remove-Me", operation: "remove" },
+  ]);
+});
+
+test("disabled headers and empty names are dropped", () => {
+  const disabled = makeHeader("X-Off", "v", "set");
+  disabled.enabled = false;
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [disabled, makeHeader("", "orphan", "set")],
+      }),
+    ],
+  };
+  assert.deepEqual(compileRules(state, {}), []);
+});
+
+test("paused state produces no rules", () => {
+  const state = {
+    paused: true,
+    profiles: [
+      profileWith({ id: "a", requestHeaders: [makeHeader("X", "1", "set")] }),
+    ],
+  };
+  assert.deepEqual(compileRules(state, {}), []);
+});
+
+test("disabled profile is skipped", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        enabled: false,
+        requestHeaders: [makeHeader("X", "1", "set")],
+      }),
+    ],
+  };
+  assert.deepEqual(compileRules(state, {}), []);
+});
+
+test("response-only header sets responseHeaders and omits requestHeaders", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [],
+        responseHeaders: [makeHeader("X-Frame-Options", "DENY", "set")],
+      }),
+    ],
+  };
+  const rules = compileRules(state, {});
+  assertValidRule(rules[0]);
+  assert.ok(!("requestHeaders" in rules[0].action));
+  assert.deepEqual(rules[0].action.responseHeaders, [
+    { header: "X-Frame-Options", operation: "set", value: "DENY" },
+  ]);
+});
+
+test("URL patterns produce one rule per pattern with regexFilter", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [makeHeader("X", "1", "set")],
+        urlFilters: [makeUrlFilter("a\\.com"), makeUrlFilter("b\\.com")],
+      }),
+    ],
+  };
+  const rules = compileRules(state, { a: ["a\\.com", "b\\.com"] });
+  assert.equal(rules.length, 2);
+  assert.equal(rules[0].condition.regexFilter, "a\\.com");
+  assert.equal(rules[1].condition.regexFilter, "b\\.com");
+  rules.forEach(assertValidRule);
+});
+
+test("rule ids are unique and sequential across profiles", () => {
+  const state = {
+    profiles: [
+      profileWith({ id: "a", requestHeaders: [makeHeader("A", "1", "set")] }),
+      profileWith({ id: "b", requestHeaders: [makeHeader("B", "2", "set")] }),
+    ],
+  };
+  const rules = compileRules(state, {});
+  const ids = rules.map((r) => r.id);
+  assert.deepEqual(ids, [...new Set(ids)]);
+  assert.deepEqual(ids, [1, 2]);
+});
+
+test("countActiveHeaders counts enabled+named across enabled profiles", () => {
+  const state = {
+    profiles: [
+      profileWith({
+        id: "a",
+        requestHeaders: [makeHeader("A", "1", "set"), makeHeader("", "", "set")],
+        responseHeaders: [makeHeader("B", "2", "set")],
+      }),
+    ],
+  };
+  assert.equal(countActiveHeaders(state), 2);
+  assert.equal(countActiveHeaders({ ...state, paused: true }), 0);
+});
+
+test("headerActions handles append operation", () => {
+  const actions = headerActions([makeHeader("Cookie", "a=b", "append")]);
+  assert.deepEqual(actions, [
+    { header: "Cookie", operation: "append", value: "a=b" },
+  ]);
+});
+
+test("normalizeState repairs garbage input to a default", () => {
+  const s = normalizeState({ nonsense: true });
+  assert.ok(Array.isArray(s.profiles) && s.profiles.length === 1);
+  assert.equal(s.paused, false);
+  assert.ok(s.profiles[0].id === s.selectedProfileId);
+});
+
+test("normalizeState coerces partial profiles safely", () => {
+  const s = normalizeState({
+    profiles: [{ name: "P", requestHeaders: [{ name: "H", value: "v" }] }],
+  });
+  const h = s.profiles[0].requestHeaders[0];
+  assert.equal(h.operation, "set"); // defaulted
+  assert.equal(h.enabled, true); // defaulted
+  assert.ok(typeof h.id === "string" && h.id.length > 0); // id assigned
+});
+
+console.log(`\n${passed} tests passed`);
