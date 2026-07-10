@@ -18,8 +18,8 @@ everything stays in your browser.
   (clearer than juggling separate "modify" vs "filter" lists).
 - **Per-header descriptions** — annotate what each header is for via an
   expandable note. Metadata only — it's never sent as a real header.
-- **Profile switcher** — a scrollable strip of colour-coded pills; click to
-  switch, double-click to rename, `+` to add. Each pill has its own **⋮ menu**
+- **Profile sidebar** — profiles listed down the left; click to switch,
+  double-click to rename, `+ New profile` to add. Each row has a hover **⋮ menu**
   to rename, duplicate, recolour, enable/disable, or delete that profile.
 - **URL filters** — scope a profile to URLs matching a regular expression;
   invalid patterns are flagged instead of silently breaking everything.

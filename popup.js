@@ -59,8 +59,8 @@ function el(tag, props = {}, children = []) {
 const $ = (id) => document.getElementById(id);
 const dom = {
   app: $("app"),
-  profilebar: document.querySelector(".profilebar"),
-  profileStrip: $("profileStrip"),
+  profileList: $("profileList"),
+  addProfileBtn: $("addProfileBtn"),
   profileMenu: $("profileMenu"),
   pauseBtn: $("pauseBtn"),
   pausedBanner: $("pausedBanner"),
@@ -304,23 +304,24 @@ function renderPanels() {
   dom.countFilters.textContent = p.urlFilters.length;
 }
 
-function renderProfiles() {
-  dom.profileStrip.textContent = "";
+function renderSidebar() {
+  dom.profileList.textContent = "";
   for (const p of state.profiles) {
     const active = p.id === state.selectedProfileId;
-    const pill = el("button", {
-      class:
-        "pill" + (active ? " is-active" : "") + (p.enabled ? "" : " pill--off"),
+    const item = el("div", {
+      class: "pf" + (active ? " is-active" : "") + (p.enabled ? "" : " pf--off"),
       title: p.enabled ? p.name : `${p.name} (disabled)`,
     });
-    pill.dataset.profileId = p.id;
+    item.dataset.profileId = p.id;
 
-    const dot = el("span", { class: "pill__dot" });
+    const bar = el("span", { class: "pf__bar" });
+    if (active) bar.style.background = p.color;
+    const dot = el("span", { class: "pf__dot" });
     dot.style.background = p.color;
-    const name = el("span", { class: "pill__name", textContent: p.name });
+    const name = el("span", { class: "pf__name", textContent: p.name });
 
-    // Per-profile actions button (rename / duplicate / colour / delete).
-    const actions = el("button", { class: "pill__menu", title: "Profile actions" }, [
+    // Per-profile actions button (rename / duplicate / enable / colour / delete).
+    const actions = el("button", { class: "pf__menu", title: "Profile actions" }, [
       glyph("more"),
     ]);
     actions.addEventListener("click", (e) => {
@@ -332,28 +333,19 @@ function renderProfiles() {
       }
     });
 
-    pill.append(dot, name, actions);
+    item.append(bar, dot, name, actions);
     if (active) {
-      pill.style.borderColor = p.color;
-      pill.style.background = `color-mix(in srgb, ${p.color} 14%, var(--bg-elev))`;
+      item.style.background = `color-mix(in srgb, ${p.color} 12%, transparent)`;
     }
-    pill.addEventListener("click", () => selectProfile(p.id));
-    pill.addEventListener("dblclick", () => {
-      if (p.id === state.selectedProfileId) startRename(p, pill, name);
+    item.addEventListener("click", () => selectProfile(p.id));
+    item.addEventListener("dblclick", () => {
+      if (p.id === state.selectedProfileId) startRename(p, item, name);
     });
-    dom.profileStrip.append(pill);
+    dom.profileList.append(item);
   }
 
-  const add = el("button", {
-    class: "pill pill--add",
-    title: "New profile",
-    textContent: "+",
-  });
-  add.addEventListener("click", addProfile);
-  dom.profileStrip.append(add);
-
-  const activePill = dom.profileStrip.querySelector(".pill.is-active");
-  if (activePill) activePill.scrollIntoView({ inline: "nearest", block: "nearest" });
+  const activeItem = dom.profileList.querySelector(".pf.is-active");
+  if (activeItem) activeItem.scrollIntoView({ block: "nearest" });
 }
 
 function renderPausedUI() {
@@ -377,7 +369,7 @@ function renderErrors(errors) {
 }
 
 function renderAll() {
-  renderProfiles();
+  renderSidebar();
   renderPanels();
   renderPausedUI();
 }
@@ -524,7 +516,7 @@ function openProfileMenu(p, anchorBtn) {
     menuItem(p.enabled ? "Disable profile" : "Enable profile", () => {
       p.enabled = !p.enabled;
       save();
-      renderProfiles();
+      renderSidebar();
       closeMenu();
     }),
   );
@@ -542,7 +534,7 @@ function openProfileMenu(p, anchorBtn) {
       colors
         .querySelectorAll(".swatch")
         .forEach((sw) => sw.classList.toggle("is-selected", sw.title === c));
-      renderProfiles();
+      renderSidebar();
     });
     colors.append(s);
   }
@@ -577,14 +569,19 @@ function openProfileMenu(p, anchorBtn) {
 
 function positionMenu(menu, anchorBtn) {
   menu.hidden = false; // unhide so we can measure it
-  const barRect = dom.profilebar.getBoundingClientRect();
+  const appRect = dom.app.getBoundingClientRect();
   const btnRect = anchorBtn.getBoundingClientRect();
-  const menuW = menu.offsetWidth || 190;
-  let left = btnRect.left - barRect.left;
-  left = Math.max(8, Math.min(left, barRect.width - menuW - 8));
+  const mw = menu.offsetWidth || 190;
+  const mh = menu.offsetHeight || 200;
+  const left = clamp(btnRect.left - appRect.left, 6, appRect.width - mw - 6);
+  let top = btnRect.bottom - appRect.top + 4;
+  if (top + mh > appRect.height - 6) {
+    top = btnRect.top - appRect.top - mh - 4; // flip above when near the bottom
+    if (top < 6) top = 6;
+  }
   menu.style.left = left + "px";
   menu.style.right = "auto";
-  menu.style.top = btnRect.bottom - barRect.top + 6 + "px";
+  menu.style.top = top + "px";
 }
 
 function selectProfile(id) {
@@ -594,7 +591,7 @@ function selectProfile(id) {
   if (id === state.selectedProfileId) return;
   state.selectedProfileId = id;
   save();
-  renderProfiles();
+  renderSidebar();
   renderPanels();
   setActiveTab(activeTab);
 }
@@ -659,14 +656,14 @@ function deleteProfile(p) {
 }
 
 function renameProfile(p) {
-  const pill = dom.profileStrip.querySelector(`[data-profile-id="${p.id}"]`);
-  const label = pill && pill.querySelector(".pill__name");
-  if (pill && label) startRename(p, pill, label);
+  const item = dom.profileList.querySelector(`[data-profile-id="${p.id}"]`);
+  const label = item && item.querySelector(".pf__name");
+  if (item && label) startRename(p, item, label);
 }
 
 function startRename(profile, pill, label) {
   const input = el("input", {
-    class: "pill__rename",
+    class: "pf__rename",
     value: profile.name,
     spellcheck: false,
   });
@@ -682,7 +679,7 @@ function startRename(profile, pill, label) {
       profile.name = input.value.trim() || profile.name;
       save();
     }
-    renderProfiles();
+    renderSidebar();
   };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -881,6 +878,7 @@ function wire() {
     renderPausedUI();
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
+  dom.addProfileBtn.addEventListener("click", addProfile);
 
   // Close the per-profile menu on any outside click.
   document.addEventListener("click", (e) => {

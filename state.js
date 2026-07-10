@@ -43,11 +43,11 @@ export const OPERATIONS = ["set", "append", "remove"];
 // Popup resize bounds. Chrome caps extension popups at ~800x600, so we stay
 // under that to avoid the browser clipping or adding its own scrollbar.
 export const SIZE_LIMITS = {
-  minWidth: 320,
+  minWidth: 360,
   maxWidth: 780,
   minHeight: 320,
   maxHeight: 590,
-  defaultWidth: 400,
+  defaultWidth: 470,
   defaultHeight: 520,
 };
 

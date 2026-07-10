@@ -45,6 +45,12 @@
   box-sizing: border-box;
 }
 
+/* Class-based display rules (e.g. .banner { display: flex }) otherwise win over
+   the UA [hidden] rule, leaving elements visible when hidden is set. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -208,59 +214,6 @@ body {
   padding: 4px 10px;
   font-weight: 600;
   cursor: pointer;
-}
-
-/* ---------- Profile bar ---------- */
-.profilebar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-}
-
-.profilebar__left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
-
-.profilebar__right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.profile-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.profile-select {
-  flex: 1;
-  min-width: 0;
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--bg-elev);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 7px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.profile-select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* ---------- Switch ---------- */
@@ -630,118 +583,160 @@ body {
   background: transparent;
 }
 
-/* ---------- Profile pills ---------- */
-.profiles {
+/* ---------- Workspace: sidebar + main ---------- */
+.workspace {
   display: flex;
-  align-items: center;
-  gap: 6px;
   flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
+  min-height: 0;
 }
-.profiles::-webkit-scrollbar {
-  height: 6px;
-}
-.profiles::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 3px;
-}
-.profilebar__ctrls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.sidebar {
+  width: 132px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg-elev);
 }
-.pill {
+.sidebar__head {
+  padding: 10px 12px 4px;
+}
+.sidebar__title {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar__list::-webkit-scrollbar {
+  width: 7px;
+}
+.sidebar__list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+.sidebar__add {
+  margin: 6px;
+  padding: 8px 6px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  flex-shrink: 0;
-  max-width: 168px;
-  padding: 6px 11px;
-  border: 1px solid var(--border);
-  background: var(--bg-elev);
-  color: var(--text);
-  border-radius: 999px;
-  font-size: 12.5px;
-  font-weight: 600;
+  justify-content: center;
+  gap: 5px;
+}
+.sidebar__add:hover {
+  background: var(--accent-weak);
+}
+.sidebar__add .iconbtn__glyph {
+  width: 12px;
+  height: 12px;
+}
+.main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Profile list item ---------- */
+.pf {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px 7px 9px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition:
-    border-color 0.12s ease,
-    background 0.12s ease;
-}
-.pill:hover {
-  border-color: var(--border-strong);
-}
-.pill.is-active {
   color: var(--text);
 }
-.pill__dot {
+.pf:hover {
+  background: var(--bg-sunken);
+}
+.pf__bar {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: transparent;
+}
+.pf__dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.pill__name {
+.pf__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pill__menu {
+.pf--off {
+  opacity: 0.5;
+}
+.pf--off .pf__name {
+  text-decoration: line-through;
+}
+.pf__menu {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin: -1px -5px -1px 1px;
+  width: 20px;
+  height: 20px;
   padding: 0;
+  flex-shrink: 0;
   border: none;
   background: transparent;
   color: var(--text-faint);
   border-radius: 5px;
   cursor: pointer;
-  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
 }
-.pill__menu:hover {
+.pf:hover .pf__menu,
+.pf.is-active .pf__menu {
+  opacity: 1;
+}
+.pf__menu:hover {
   color: var(--text);
-  background: var(--bg-sunken);
+  background: var(--bg-elev);
 }
-.pill.is-active .pill__menu {
-  color: var(--text-dim);
+.pf__menu .iconbtn__glyph {
+  width: 15px;
+  height: 15px;
 }
-.pill__menu .iconbtn__glyph {
-  width: 14px;
-  height: 14px;
-}
-.pill--off {
-  opacity: 0.55;
-}
-.pill--off .pill__name {
-  text-decoration: line-through;
-}
-.pill--add {
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1;
-  padding: 5px 11px;
-  color: var(--text-dim);
-}
-.pill--add:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.pill__rename {
+.pf__rename {
+  flex: 1;
+  min-width: 0;
   border: 1px solid var(--accent);
   background: var(--bg);
   color: var(--text);
   font: inherit;
   font-weight: 600;
-  border-radius: 999px;
-  padding: 5px 10px;
-  width: 130px;
+  font-size: 12.5px;
+  border-radius: 5px;
+  padding: 3px 6px;
   outline: none;
 }
 

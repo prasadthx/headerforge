@@ -38,57 +38,65 @@
       <!-- Error banner -->
       <div id="errorBanner" class="banner banner--error" hidden></div>
 
-      <!-- Profile row: scrollable pill switcher; each pill has its own actions -->
-      <section class="profilebar">
-        <div class="profiles" id="profileStrip"><!-- pills injected --></div>
-        <!-- Per-profile action menu (contents populated on open) -->
-        <div id="profileMenu" class="menu" hidden></div>
-      </section>
-
-      <!-- Tabs -->
-      <nav class="tabs" role="tablist">
-        <button class="tab is-active" data-tab="request" role="tab">
-          Request <span class="tab__count" id="countRequest">0</span>
-        </button>
-        <button class="tab" data-tab="response" role="tab">
-          Response <span class="tab__count" id="countResponse">0</span>
-        </button>
-        <button class="tab" data-tab="filters" role="tab">
-          URL Filters <span class="tab__count" id="countFilters">0</span>
-        </button>
-      </nav>
-
-      <!-- Panels -->
-      <main class="content">
-        <section class="panel is-active" data-panel="request">
-          <div class="rows" id="requestRows"></div>
-          <button class="addrow" data-add="request">+ Add request header</button>
-          <div class="panel-tools">
-            <button class="linkbtn" data-himport="request">Import headers…</button>
-            <span class="panel-tools__sep">·</span>
-            <button class="linkbtn" data-hexport="request">Export headers</button>
+      <!-- Workspace: profile sidebar (left) + header editor (right) -->
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar__head">
+            <span class="sidebar__title">Profiles</span>
           </div>
-        </section>
+          <div class="sidebar__list" id="profileList"><!-- items injected --></div>
+          <button class="sidebar__add" id="addProfileBtn" title="New profile">
+            <span class="iconbtn__glyph" data-icon="plus"></span> New profile
+          </button>
+        </aside>
 
-        <section class="panel" data-panel="response">
-          <div class="rows" id="responseRows"></div>
-          <button class="addrow" data-add="response">+ Add response header</button>
-          <div class="panel-tools">
-            <button class="linkbtn" data-himport="response">Import headers…</button>
-            <span class="panel-tools__sep">·</span>
-            <button class="linkbtn" data-hexport="response">Export headers</button>
-          </div>
-        </section>
+        <div class="main">
+          <!-- Tabs -->
+          <nav class="tabs" role="tablist">
+            <button class="tab is-active" data-tab="request" role="tab">
+              Request <span class="tab__count" id="countRequest">0</span>
+            </button>
+            <button class="tab" data-tab="response" role="tab">
+              Response <span class="tab__count" id="countResponse">0</span>
+            </button>
+            <button class="tab" data-tab="filters" role="tab">
+              Filters <span class="tab__count" id="countFilters">0</span>
+            </button>
+          </nav>
 
-        <section class="panel" data-panel="filters">
-          <p class="hint">
-            Limit this profile to URLs matching a regular expression. Leave empty
-            to apply to every request.
-          </p>
-          <div class="rows" id="filterRows"></div>
-          <button class="addrow" data-add="filter">+ Add URL filter</button>
-        </section>
-      </main>
+          <!-- Panels -->
+          <main class="content">
+            <section class="panel is-active" data-panel="request">
+              <div class="rows" id="requestRows"></div>
+              <button class="addrow" data-add="request">+ Add request header</button>
+              <div class="panel-tools">
+                <button class="linkbtn" data-himport="request">Import headers…</button>
+                <span class="panel-tools__sep">·</span>
+                <button class="linkbtn" data-hexport="request">Export headers</button>
+              </div>
+            </section>
+
+            <section class="panel" data-panel="response">
+              <div class="rows" id="responseRows"></div>
+              <button class="addrow" data-add="response">+ Add response header</button>
+              <div class="panel-tools">
+                <button class="linkbtn" data-himport="response">Import headers…</button>
+                <span class="panel-tools__sep">·</span>
+                <button class="linkbtn" data-hexport="response">Export headers</button>
+              </div>
+            </section>
+
+            <section class="panel" data-panel="filters">
+              <p class="hint">
+                Limit this profile to URLs matching a regular expression. Leave
+                empty to apply to every request.
+              </p>
+              <div class="rows" id="filterRows"></div>
+              <button class="addrow" data-add="filter">+ Add URL filter</button>
+            </section>
+          </main>
+        </div>
+      </div>
 
       <!-- Footer -->
       <footer class="footer">
@@ -101,6 +109,9 @@
           Import
         </button>
       </footer>
+
+      <!-- Per-profile action menu (contents populated on open) -->
+      <div id="profileMenu" class="menu" hidden></div>
 
       <!-- Drag-to-resize grip (bottom-left, since the popup is anchored top-right) -->
       <div id="resizeGrip" class="resize-grip" title="Drag to resize"></div>
