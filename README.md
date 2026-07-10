@@ -19,8 +19,8 @@ everything stays in your browser.
 - **Per-header descriptions** — annotate what each header is for via an
   expandable note. Metadata only — it's never sent as a real header.
 - **Profile switcher** — a scrollable strip of colour-coded pills; click to
-  switch, double-click to rename, `+` to add. Each profile toggles on/off
-  independently and can be duplicated.
+  switch, double-click to rename, `+` to add. Each pill has its own **⋮ menu**
+  to rename, duplicate, recolour, enable/disable, or delete that profile.
 - **URL filters** — scope a profile to URLs matching a regular expression;
   invalid patterns are flagged instead of silently breaking everything.
 - **Import headers from JSON** — per panel; accepts a headers array *or* a plain

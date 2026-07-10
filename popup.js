@@ -24,7 +24,8 @@ const ICONS = {
   plus: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>',
   trash:
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4l1-2zM6 9h12l-1 11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 9z"/></svg>',
-  note: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H9l-4 4-.01-4H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm3 5v2h10V9H7zm0 3.5V14h7v-1.5H7z"/></svg>',
+  // Pencil — "write a description for this header".
+  note: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 1.83H5v-.92l9.06-9.06.92.92-9.06 9.06zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
 };
 
 function svgMask(svg) {
@@ -58,11 +59,9 @@ function el(tag, props = {}, children = []) {
 const $ = (id) => document.getElementById(id);
 const dom = {
   app: $("app"),
+  profilebar: document.querySelector(".profilebar"),
   profileStrip: $("profileStrip"),
-  profileEnabled: $("profileEnabled"),
   profileMenu: $("profileMenu"),
-  profileMenuBtn: $("profileMenuBtn"),
-  colorPicker: $("colorPicker"),
   pauseBtn: $("pauseBtn"),
   pausedBanner: $("pausedBanner"),
   resumeBtn: $("resumeBtn"),
@@ -88,6 +87,7 @@ let state;
 let activeTab = "request";
 let saveTimer;
 let pendingHeaderKind = "request"; // which list a header-import targets
+let menuProfileId = null; // profile the open action menu belongs to
 
 function currentProfile() {
   return (
@@ -198,10 +198,14 @@ function headerRow(list, h) {
   const hasNote = (h.description || "").length > 0;
   noteLine.hidden = !hasNote;
 
-  const noteBtn = el("button", {
-    class: "iconbtn iconbtn--sm notebtn" + (hasNote ? " is-active" : ""),
-    title: "Add a description",
-  }, [glyph("note")]);
+  const noteBtn = el(
+    "button",
+    {
+      class: "iconbtn iconbtn--sm notebtn" + (hasNote ? " is-active" : ""),
+      title: "Add a description",
+    },
+    [glyph("note")],
+  );
   noteBtn.addEventListener("click", () => {
     noteLine.hidden = !noteLine.hidden;
     if (!noteLine.hidden) noteInput.focus();
@@ -309,17 +313,33 @@ function renderProfiles() {
         "pill" + (active ? " is-active" : "") + (p.enabled ? "" : " pill--off"),
       title: p.enabled ? p.name : `${p.name} (disabled)`,
     });
+    pill.dataset.profileId = p.id;
+
     const dot = el("span", { class: "pill__dot" });
     dot.style.background = p.color;
     const name = el("span", { class: "pill__name", textContent: p.name });
-    pill.append(dot, name);
+
+    // Per-profile actions button (rename / duplicate / colour / delete).
+    const actions = el("button", { class: "pill__menu", title: "Profile actions" }, [
+      glyph("more"),
+    ]);
+    actions.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!dom.profileMenu.hidden && menuProfileId === p.id) {
+        closeMenu();
+      } else {
+        openProfileMenu(p, actions);
+      }
+    });
+
+    pill.append(dot, name, actions);
     if (active) {
       pill.style.borderColor = p.color;
       pill.style.background = `color-mix(in srgb, ${p.color} 14%, var(--bg-elev))`;
     }
     pill.addEventListener("click", () => selectProfile(p.id));
     pill.addEventListener("dblclick", () => {
-      if (p.id === state.selectedProfileId) startRename(pill, name);
+      if (p.id === state.selectedProfileId) startRename(p, pill, name);
     });
     dom.profileStrip.append(pill);
   }
@@ -332,28 +352,8 @@ function renderProfiles() {
   add.addEventListener("click", addProfile);
   dom.profileStrip.append(add);
 
-  dom.profileEnabled.checked = currentProfile().enabled;
   const activePill = dom.profileStrip.querySelector(".pill.is-active");
   if (activePill) activePill.scrollIntoView({ inline: "nearest", block: "nearest" });
-}
-
-function renderColors() {
-  dom.colorPicker.textContent = "";
-  const p = currentProfile();
-  for (const c of PROFILE_COLORS) {
-    const s = el("button", {
-      class: "swatch" + (c === p.color ? " is-selected" : ""),
-      title: c,
-    });
-    s.style.background = c;
-    s.addEventListener("click", () => {
-      p.color = c;
-      save();
-      renderProfiles();
-      renderColors();
-    });
-    dom.colorPicker.append(s);
-  }
 }
 
 function renderPausedUI() {
@@ -379,7 +379,6 @@ function renderErrors(errors) {
 function renderAll() {
   renderProfiles();
   renderPanels();
-  renderColors();
   renderPausedUI();
 }
 
@@ -491,6 +490,101 @@ function setActiveTab(name) {
 // ---------------------------------------------------------------------------
 function closeMenu() {
   dom.profileMenu.hidden = true;
+  menuProfileId = null;
+}
+
+function menuItem(label, onClick, cls = "") {
+  const b = el("button", {
+    class: "menu__item" + (cls ? " " + cls : ""),
+    textContent: label,
+  });
+  if (onClick) b.addEventListener("click", onClick);
+  return b;
+}
+
+// Build + open the action menu for a specific profile, anchored to its button.
+function openProfileMenu(p, anchorBtn) {
+  const menu = dom.profileMenu;
+  menuProfileId = p.id;
+  menu.textContent = "";
+
+  menu.append(
+    menuItem("Rename profile", () => {
+      closeMenu();
+      renameProfile(p);
+    }),
+  );
+  menu.append(
+    menuItem("Duplicate profile", () => {
+      closeMenu();
+      cloneProfile(p);
+    }),
+  );
+  menu.append(
+    menuItem(p.enabled ? "Disable profile" : "Enable profile", () => {
+      p.enabled = !p.enabled;
+      save();
+      renderProfiles();
+      closeMenu();
+    }),
+  );
+
+  const colors = el("div", { class: "menu__colors" });
+  for (const c of PROFILE_COLORS) {
+    const s = el("button", {
+      class: "swatch" + (c === p.color ? " is-selected" : ""),
+      title: c,
+    });
+    s.style.background = c;
+    s.addEventListener("click", () => {
+      p.color = c;
+      save();
+      colors
+        .querySelectorAll(".swatch")
+        .forEach((sw) => sw.classList.toggle("is-selected", sw.title === c));
+      renderProfiles();
+    });
+    colors.append(s);
+  }
+  menu.append(colors);
+
+  const del = menuItem("Delete profile", null, "menu__item--danger");
+  let armed = false;
+  let armTimer;
+  del.addEventListener("click", () => {
+    if (state.profiles.length <= 1) {
+      toast("Keep at least one profile");
+      return;
+    }
+    if (!armed) {
+      armed = true;
+      del.textContent = "Click again to confirm";
+      clearTimeout(armTimer);
+      armTimer = setTimeout(() => {
+        armed = false;
+        del.textContent = "Delete profile";
+      }, 3000);
+      return;
+    }
+    clearTimeout(armTimer);
+    closeMenu();
+    deleteProfile(p);
+  });
+  menu.append(del);
+
+  positionMenu(menu, anchorBtn);
+}
+
+function positionMenu(menu, anchorBtn) {
+  menu.hidden = false; // unhide so we can measure it
+  const barRect = dom.profilebar.getBoundingClientRect();
+  const btnRect = anchorBtn.getBoundingClientRect();
+  const menuW = menu.offsetWidth || 190;
+  let left = btnRect.left - barRect.left;
+  left = Math.max(8, Math.min(left, barRect.width - menuW - 8));
+  menu.style.left = left + "px";
+  menu.style.right = "auto";
+  menu.style.top = btnRect.bottom - barRect.top + 6 + "px";
 }
 
 function selectProfile(id) {
@@ -528,6 +622,7 @@ function addItem(kind) {
 }
 
 function addProfile() {
+  closeMenu();
   const n = state.profiles.length + 1;
   const p = makeProfile(`Profile ${n}`, n - 1);
   state.profiles.push(p);
@@ -537,9 +632,7 @@ function addProfile() {
   setActiveTab("request");
 }
 
-function cloneProfile() {
-  closeMenu();
-  const src = currentProfile();
+function cloneProfile(src) {
   const copy = normalizeState({ profiles: [{ ...src, name: `${src.name} copy` }] })
     .profiles[0];
   copy.id = uid();
@@ -553,27 +646,28 @@ function cloneProfile() {
   renderAll();
 }
 
-function deleteCurrentProfile() {
-  const idx = state.profiles.findIndex((p) => p.id === state.selectedProfileId);
+function deleteProfile(p) {
+  if (state.profiles.length <= 1) return;
+  const idx = state.profiles.findIndex((x) => x.id === p.id);
   if (idx < 0) return;
   state.profiles.splice(idx, 1);
-  state.selectedProfileId = state.profiles[Math.max(0, idx - 1)].id;
+  if (state.selectedProfileId === p.id) {
+    state.selectedProfileId = state.profiles[Math.max(0, idx - 1)].id;
+  }
   save({ immediate: true });
   renderAll();
 }
 
-function renameActiveProfile() {
-  closeMenu();
-  const pill = dom.profileStrip.querySelector(".pill.is-active");
+function renameProfile(p) {
+  const pill = dom.profileStrip.querySelector(`[data-profile-id="${p.id}"]`);
   const label = pill && pill.querySelector(".pill__name");
-  if (pill && label) startRename(pill, label);
+  if (pill && label) startRename(p, pill, label);
 }
 
-function startRename(pill, label) {
-  const p = currentProfile();
+function startRename(profile, pill, label) {
   const input = el("input", {
     class: "pill__rename",
-    value: p.name,
+    value: profile.name,
     spellcheck: false,
   });
   input.addEventListener("click", (e) => e.stopPropagation());
@@ -585,7 +679,7 @@ function startRename(pill, label) {
     if (done) return;
     done = true;
     if (commit) {
-      p.name = input.value.trim() || p.name;
+      profile.name = input.value.trim() || profile.name;
       save();
     }
     renderProfiles();
@@ -788,57 +882,11 @@ function wire() {
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
 
-  dom.profileEnabled.addEventListener("change", () => {
-    currentProfile().enabled = dom.profileEnabled.checked;
-    save();
-    renderProfiles();
-  });
-
-  dom.profileMenuBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    dom.profileMenu.hidden = !dom.profileMenu.hidden;
-    if (!dom.profileMenu.hidden) renderColors();
-  });
+  // Close the per-profile menu on any outside click.
   document.addEventListener("click", (e) => {
-    if (
-      !dom.profileMenu.hidden &&
-      !dom.profileMenu.contains(e.target) &&
-      e.target !== dom.profileMenuBtn
-    ) {
+    if (!dom.profileMenu.hidden && !dom.profileMenu.contains(e.target)) {
       closeMenu();
     }
-  });
-
-  dom.profileMenu
-    .querySelector('[data-action="rename"]')
-    .addEventListener("click", renameActiveProfile);
-  dom.profileMenu
-    .querySelector('[data-action="clone"]')
-    .addEventListener("click", cloneProfile);
-
-  const delBtn = dom.profileMenu.querySelector('[data-action="delete"]');
-  let armed = false;
-  let armTimer;
-  const disarm = () => {
-    armed = false;
-    delBtn.textContent = "Delete profile";
-  };
-  delBtn.addEventListener("click", () => {
-    if (state.profiles.length <= 1) {
-      toast("Keep at least one profile");
-      return;
-    }
-    if (!armed) {
-      armed = true;
-      delBtn.textContent = "Click again to confirm";
-      clearTimeout(armTimer);
-      armTimer = setTimeout(disarm, 3000);
-      return;
-    }
-    clearTimeout(armTimer);
-    disarm();
-    deleteCurrentProfile();
-    closeMenu();
   });
 
   dom.exportBtn.addEventListener("click", exportProfiles);

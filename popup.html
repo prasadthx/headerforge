@@ -38,27 +38,11 @@
       <!-- Error banner -->
       <div id="errorBanner" class="banner banner--error" hidden></div>
 
-      <!-- Profile row: scrollable pill switcher + active-profile controls -->
+      <!-- Profile row: scrollable pill switcher; each pill has its own actions -->
       <section class="profilebar">
         <div class="profiles" id="profileStrip"><!-- pills injected --></div>
-        <div class="profilebar__ctrls">
-          <label class="switch switch--sm" title="Enable this profile">
-            <input type="checkbox" id="profileEnabled" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </label>
-          <button id="profileMenuBtn" class="iconbtn" title="Profile actions">
-            <span class="iconbtn__glyph" data-icon="more"></span>
-          </button>
-        </div>
-        <!-- Profile action menu -->
-        <div id="profileMenu" class="menu" hidden>
-          <button class="menu__item" data-action="rename">Rename profile</button>
-          <button class="menu__item" data-action="clone">Duplicate profile</button>
-          <div class="menu__colors" id="colorPicker"></div>
-          <button class="menu__item menu__item--danger" data-action="delete">
-            Delete profile
-          </button>
-        </div>
+        <!-- Per-profile action menu (contents populated on open) -->
+        <div id="profileMenu" class="menu" hidden></div>
       </section>
 
       <!-- Tabs -->

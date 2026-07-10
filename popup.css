@@ -690,6 +690,32 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pill__menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin: -1px -5px -1px 1px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pill__menu:hover {
+  color: var(--text);
+  background: var(--bg-sunken);
+}
+.pill.is-active .pill__menu {
+  color: var(--text-dim);
+}
+.pill__menu .iconbtn__glyph {
+  width: 14px;
+  height: 14px;
+}
 .pill--off {
   opacity: 0.55;
 }
