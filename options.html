@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="options.css" />
+    <title>HeaderForge — About &amp; Settings</title>
+  </head>
+  <body class="options">
+    <div class="page">
+      <header class="page__head">
+        <img src="icons/icon128.png" class="page__logo" width="44" height="44" alt="" />
+        <div>
+          <h1 class="page__title">HeaderForge</h1>
+          <p class="page__sub">HTTP header manipulation for developers</p>
+        </div>
+        <span class="ver" id="version">v—</span>
+      </header>
+
+      <!-- Staged-update banner -->
+      <div class="card card--accent" id="updateReady" hidden>
+        <div>
+          <strong>Update ready</strong> <span id="updateReadyVer"></span>
+        </div>
+        <button class="btn btn--primary" id="applyUpdateBtn">Reload to update</button>
+      </div>
+
+      <!-- About -->
+      <section class="card">
+        <h2 class="card__title">About</h2>
+        <p class="card__text">
+          HeaderForge lets you add, modify, and remove HTTP request and response
+          headers on the sites you choose — organised into colour-coded profiles
+          with URL filters, per-header descriptions, and JSON import/export.
+          Everything stays on your device; the extension makes no network
+          requests of its own.
+        </p>
+        <div class="links">
+          <a class="btn" id="repoLink" href="#" target="_blank" rel="noopener">GitHub</a>
+          <a class="btn" id="issuesLink" href="#" target="_blank" rel="noopener">Report an issue</a>
+          <a class="btn" id="privacyLink" href="#" target="_blank" rel="noopener">Privacy</a>
+        </div>
+      </section>
+
+      <!-- Updates -->
+      <section class="card">
+        <h2 class="card__title">Updates</h2>
+        <div class="row-between">
+          <div>
+            <div class="row-label">Current version</div>
+            <div class="row-value" id="version2">—</div>
+          </div>
+          <button class="btn" id="checkUpdateBtn">Check for updates</button>
+        </div>
+        <p class="status" id="updateStatus"></p>
+        <p class="card__note">
+          The Chrome Web Store build updates itself automatically; this button
+          asks Chrome to check right now.
+        </p>
+      </section>
+
+      <!-- Appearance -->
+      <section class="card">
+        <h2 class="card__title">Appearance</h2>
+        <div class="row-between">
+          <div class="row-label">Theme</div>
+          <div class="seg" id="themeSeg">
+            <button data-theme-opt="system" class="seg__btn">System</button>
+            <button data-theme-opt="light" class="seg__btn">Light</button>
+            <button data-theme-opt="dark" class="seg__btn">Dark</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Data -->
+      <section class="card">
+        <h2 class="card__title">Data</h2>
+        <p class="card__text">
+          Your profiles are stored locally and preserved across updates.
+        </p>
+        <div class="links">
+          <button class="btn" id="exportBtn">Export profiles</button>
+          <button class="btn" id="importBtn">Import profiles</button>
+          <button class="btn btn--danger" id="resetBtn">Reset all data</button>
+        </div>
+        <p class="status" id="dataStatus"></p>
+        <input id="importFile" type="file" accept="application/json,.json" hidden />
+      </section>
+
+      <footer class="page__foot">
+        <span id="footVersion">HeaderForge</span> · MIT License ·
+        <a id="footRepo" href="#" target="_blank" rel="noopener">source</a>
+      </footer>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

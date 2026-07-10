@@ -4,12 +4,19 @@
 // declarativeNetRequest *dynamic* rules in sync with it. Dynamic rules persist
 // across browser restarts, so headers stay active even when the popup is closed.
 
-import { STORAGE_KEY, ERROR_KEY, normalizeState, createDefaultState } from "./state.js";
+import {
+  STORAGE_KEY,
+  ERROR_KEY,
+  UPDATE_KEY,
+  normalizeState,
+  createDefaultState,
+  migrate,
+} from "./state.js";
 import { compileRules, countActiveHeaders } from "./rules.js";
 
 async function loadState() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  return normalizeState(stored[STORAGE_KEY]);
+  return normalizeState(migrate(stored[STORAGE_KEY]));
 }
 
 // Validate a user-supplied regex against the declarativeNetRequest engine (RE2).
@@ -113,16 +120,29 @@ async function doSyncRules() {
 
 // --- Lifecycle wiring -------------------------------------------------------
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
   if (!stored[STORAGE_KEY]) {
+    // Fresh install — seed a default profile.
     await chrome.storage.local.set({ [STORAGE_KEY]: createDefaultState() });
+  } else if (details.reason === "update") {
+    // Existing user updating — migrate saved data forward, never drop it.
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: normalizeState(migrate(stored[STORAGE_KEY])),
+    });
+    await chrome.storage.local.remove(UPDATE_KEY); // update now applied
   }
   await syncRules();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   syncRules();
+});
+
+// When Chrome has a newer version staged, record it so the UI can offer a
+// one-click reload instead of waiting for the next browser restart.
+chrome.runtime.onUpdateAvailable.addListener((details) => {
+  chrome.storage.local.set({ [UPDATE_KEY]: details.version || true });
 });
 
 // The popup persists edits to storage; rebuild rules whenever they change.

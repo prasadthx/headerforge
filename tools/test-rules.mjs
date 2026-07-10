@@ -6,6 +6,8 @@ import {
   makeHeader,
   makeProfile,
   makeUrlFilter,
+  migrate,
+  SCHEMA_VERSION,
   SIZE_LIMITS,
 } from "../state.js";
 import {
@@ -249,6 +251,45 @@ test("normalizeState clamps popup size and defaults height to null", () => {
   const s2 = normalizeState({ profiles: [], popupWidth: 10, popupHeight: 10 });
   assert.equal(s2.popupWidth, SIZE_LIMITS.minWidth);
   assert.equal(s2.popupHeight, SIZE_LIMITS.minHeight);
+});
+
+test("migrate + normalize preserves existing user data across an update", () => {
+  const stored = {
+    version: 1,
+    paused: true,
+    theme: "dark",
+    popupWidth: 500,
+    selectedProfileId: "p1",
+    profiles: [
+      {
+        id: "p1",
+        name: "Keep me",
+        enabled: true,
+        color: "#6366f1",
+        requestHeaders: [
+          { id: "h1", enabled: true, name: "X", value: "1", operation: "set", description: "d" },
+        ],
+        responseHeaders: [],
+        urlFilters: [{ id: "f1", enabled: true, pattern: "a\\.com" }],
+      },
+    ],
+  };
+  const out = normalizeState(migrate(stored));
+  assert.equal(out.profiles.length, 1);
+  assert.equal(out.profiles[0].name, "Keep me");
+  assert.equal(out.profiles[0].requestHeaders[0].value, "1");
+  assert.equal(out.profiles[0].requestHeaders[0].description, "d");
+  assert.equal(out.profiles[0].urlFilters[0].pattern, "a\\.com");
+  assert.equal(out.paused, true);
+  assert.equal(out.theme, "dark");
+  assert.equal(out.popupWidth, 500);
+  assert.equal(out.version, SCHEMA_VERSION);
+});
+
+test("migrate tolerates junk without throwing", () => {
+  assert.doesNotThrow(() => migrate(undefined));
+  assert.doesNotThrow(() => migrate({}));
+  assert.doesNotThrow(() => migrate("nonsense"));
 });
 
 console.log(`\n${passed} tests passed`);

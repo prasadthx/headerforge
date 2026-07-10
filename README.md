@@ -27,6 +27,8 @@ everything stays in your browser.
   `{ "Header-Name": "value" }` object, appended to the current profile.
 - **Resizable popup** — drag the bottom-left grip to size it; the dimensions are
   remembered next time you open it.
+- **About & settings page** — open it from the gear icon: version info, one-click
+  "Check for updates", theme, and data management (export / import / reset).
 - **One-tap pause** — disable all headers globally without losing your setup.
 - **Import / export profiles** — JSON round-trips; import also understands
   ModHeader-style exports (request/response headers + URL filters).
@@ -110,6 +112,22 @@ Edit any file, then click **Reload** on the extension card to see changes.
 | `<all_urls>` (host) | Required by `declarativeNetRequest` to edit headers on the sites you choose. |
 
 The extension makes **no** outbound network requests of its own.
+
+## Data & updates
+
+Your profiles live in `chrome.storage.local`, which the browser preserves across
+extension updates. HeaderForge keeps `STORAGE_KEY` stable forever and runs a
+`migrate()` step on update, so shipping a new version never wipes saved headers —
+new optional fields fall back to defaults automatically.
+
+## Publishing to the Chrome Web Store
+
+See [STORE.md](STORE.md) for a feasibility check, the exact packaging command,
+ready-to-paste listing copy, and permission justifications.
+
+## Privacy
+
+No data ever leaves your device — see [PRIVACY.md](PRIVACY.md).
 
 ## License
 

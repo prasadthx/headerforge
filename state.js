@@ -2,8 +2,16 @@
 // background service worker. Kept dependency-free so it can be imported from
 // either an ES-module popup or an ES-module service worker.
 
+// IMPORTANT: never change STORAGE_KEY across releases, or existing users lose
+// their saved profiles on update. Evolve the shape via the `version` field and
+// migrate() below. chrome.storage.local already persists across extension
+// updates, so keeping the key stable + migrating is all that's required.
 export const STORAGE_KEY = "headerforge:v1";
 export const ERROR_KEY = "headerforge:errors";
+export const UPDATE_KEY = "headerforge:updateReady";
+
+// Bump when the persisted shape changes, and add a matching step in migrate().
+export const SCHEMA_VERSION = 1;
 
 // Pleasant, distinguishable accent colors for profiles.
 export const PROFILE_COLORS = [
@@ -79,7 +87,7 @@ export function makeProfile(name, colorIndex = 0) {
 export function createDefaultState() {
   const profile = makeProfile("Profile 1", 0);
   return {
-    version: 1,
+    version: SCHEMA_VERSION,
     paused: false,
     theme: "system", // "system" | "light" | "dark"
     popupWidth: SIZE_LIMITS.defaultWidth,
@@ -93,6 +101,20 @@ function clampSize(v, min, max, fallback) {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+// Upgrade a stored blob to the current schema. Runs before normalizeState (which
+// then fills defaults and coerces types). Add one forward-only step per breaking
+// change so an update never drops a returning user's data.
+export function migrate(raw) {
+  if (!raw || typeof raw !== "object") return raw;
+  let s = raw;
+  const from = Number(s.version) || 1;
+  // Future migrations, e.g.:
+  //   if (from < 2) { s = { ...s, someNewField: DEFAULT, version: 2 }; }
+  //   if (from < 3) { ... }
+  void from;
+  return s;
 }
 
 // Defensive normalization so older/partial/imported blobs never crash the UI.
@@ -122,7 +144,7 @@ export function normalizeState(raw) {
     : profiles[0].id;
 
   return {
-    version: 1,
+    version: SCHEMA_VERSION,
     paused: Boolean(raw.paused),
     theme: ["system", "light", "dark"].includes(raw.theme) ? raw.theme : "system",
     popupWidth: clampSize(
