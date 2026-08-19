@@ -29,14 +29,16 @@ everything stays in your browser.
   invalid patterns are flagged instead of silently breaking everything.
 - **Import headers from JSON** — per panel; accepts a headers array *or* a plain
   `{ "Header-Name": "value" }` object, appended to the current profile.
-- **Resizable popup** — drag the bottom-left grip to size it; the dimensions are
-  remembered next time you open it.
-- **About & settings page** — open it from the gear icon: version info, one-click
-  "Check for updates", theme, and data management (export / import / reset).
+- **Resizable popup** — opens at a comfortable default width; drag the bottom-left
+  grip to size it and the dimensions are remembered next time you open it.
+- **In-popup settings** — the gear icon opens an inline panel: theme, description
+  placement, operation selector, and data management (export / import / reset),
+  plus an About card with version info and a "Check for updates" button.
 - **One-tap pause** — disable all headers globally without losing your setup.
 - **Import / export profiles** — JSON round-trips; import also understands
   ModHeader-style exports (request/response headers + URL filters).
-- **Light / dark / system theme.**
+- **Light / dark / system theme** — the toolbar icon and popup logo switch to a
+  dedicated dark variant automatically, so they stay visible on dark toolbars.
 - **Private by design** — no network calls, no analytics. Your headers never
   leave your machine.
 
@@ -92,6 +94,10 @@ interface.
   engine, compiles rules, and keeps the browser's dynamic rule set in sync
   whenever storage changes.
 - `popup.html` / `popup.css` / `popup.js` — the UI.
+- `options.html` / `options.css` / `options.js` — the About & settings page.
+- `icons/` — light and dark icon variants (`icon*-dark.png`); the popup and
+  options page swap them with the theme, and the toolbar icon follows via
+  `chrome.action.setIcon`.
 
 Headers are applied via dynamic rules, which persist across browser restarts, so
 your headers keep working even when the popup is closed.
@@ -127,7 +133,9 @@ new optional fields fall back to defaults automatically.
 ## Publishing to the Chrome Web Store
 
 See [STORE.md](STORE.md) for a feasibility check, the exact packaging command,
-ready-to-paste listing copy, and permission justifications.
+ready-to-paste listing copy, and permission justifications. The current release
+package (`headerforge-1.1.0.zip`, containing only the files the extension needs)
+is built and ready to upload.
 
 ## Privacy
 
