@@ -8,7 +8,7 @@ Edge, Brave, and other Chromium browsers. No account, no telemetry, no paywall â
 everything stays in your browser.
 
 <p align="center">
-  <img src="icons/icon128.png" width="96" alt="HeaderForge icon" />
+  <img src="icons/icon128.png?v=1.1.0" width="96" alt="HeaderForge icon" />
 </p>
 
 ## Features

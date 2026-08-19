@@ -84,7 +84,9 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 - **Screenshots:** 1280×800 or 640×400 PNG/JPG, 1–5 of them (open the popup +
   the About page and capture). **Required.**
 - **Small promo tile:** 440×280 (optional but recommended).
-- **Store icon:** 128×128 — already in `icons/icon128.png`. ✅
+- **Store icon:** 128×128 — already in `icons/icon128.png` (the light variant).
+  ✅ — the dark variant `icon128-dark.png` is used by the extension's own UI,
+  not required by the store.
 
 ## After publishing — updates
 
