@@ -253,6 +253,39 @@ test("normalizeState clamps popup size and defaults height to null", () => {
   assert.equal(s2.popupHeight, SIZE_LIMITS.minHeight);
 });
 
+test("normalizeState defaults header-row settings and coerces bad values", () => {
+  const s = normalizeState({ profiles: [] });
+  assert.equal(s.settings.descriptionPlacement, "inline");
+  assert.equal(s.settings.showOperation, false);
+  const s2 = normalizeState({
+    profiles: [],
+    settings: { descriptionPlacement: "banana", showOperation: "yes" },
+  });
+  assert.equal(s2.settings.descriptionPlacement, "inline");
+  assert.equal(s2.settings.showOperation, false);
+  const s3 = normalizeState({
+    profiles: [],
+    settings: { descriptionPlacement: "below", showOperation: true },
+  });
+  assert.equal(s3.settings.descriptionPlacement, "below");
+  assert.equal(s3.settings.showOperation, true);
+});
+
+test("migrate from v1 seeds default settings without touching user data", () => {
+  const stored = {
+    version: 1,
+    paused: false,
+    profiles: [
+      { id: "p1", name: "Keep me", enabled: true, requestHeaders: [] },
+    ],
+  };
+  const out = normalizeState(migrate(stored));
+  assert.equal(out.version, SCHEMA_VERSION);
+  assert.equal(out.profiles[0].name, "Keep me");
+  assert.equal(out.settings.descriptionPlacement, "inline");
+  assert.equal(out.settings.showOperation, false);
+});
+
 test("migrate + normalize preserves existing user data across an update", () => {
   const stored = {
     version: 1,

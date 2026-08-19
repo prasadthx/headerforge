@@ -10,7 +10,7 @@
   <body class="options">
     <div class="page">
       <header class="page__head">
-        <img src="icons/icon128.png" class="page__logo" width="44" height="44" alt="" />
+        <img id="pageLogo" src="icons/icon128.png" class="page__logo" width="44" height="44" alt="" />
         <div>
           <h1 class="page__title">HeaderForge</h1>
           <p class="page__sub">HTTP header manipulation for developers</p>
@@ -70,6 +70,36 @@
             <button data-theme-opt="light" class="seg__btn">Light</button>
             <button data-theme-opt="dark" class="seg__btn">Dark</button>
           </div>
+        </div>
+      </section>
+
+      <!-- Header rows -->
+      <section class="card">
+        <h2 class="card__title">Header rows</h2>
+        <div class="row-between row-between--top">
+          <div>
+            <div class="row-label">Description field</div>
+            <div class="row-note-text">
+              Where the per-header description sits in each row.
+            </div>
+          </div>
+          <div class="seg" id="descPlacementSeg">
+            <button data-desc-opt="inline" class="seg__btn">Next to value</button>
+            <button data-desc-opt="below" class="seg__btn">Below</button>
+            <button data-desc-opt="hidden" class="seg__btn">Hidden</button>
+          </div>
+        </div>
+        <div class="row-between row-between--top">
+          <div>
+            <div class="row-label">Operation selector</div>
+            <div class="row-note-text">
+              When off, each row’s on/off switch denotes set / unset.
+            </div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="showOpChk" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </label>
         </div>
       </section>
 

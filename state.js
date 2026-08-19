@@ -11,7 +11,7 @@ export const ERROR_KEY = "headerforge:errors";
 export const UPDATE_KEY = "headerforge:updateReady";
 
 // Bump when the persisted shape changes, and add a matching step in migrate().
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // Pleasant, distinguishable accent colors for profiles.
 export const PROFILE_COLORS = [
@@ -48,15 +48,28 @@ export const RESOURCE_TYPES = [
 
 export const OPERATIONS = ["set", "append", "remove"];
 
+// Where the per-header description field sits in each header row.
+export const DESCRIPTION_PLACEMENTS = ["inline", "below", "hidden"];
+
+// Layout preferences for header rows, editable from the Settings page.
+export const DEFAULT_SETTINGS = {
+  // "inline" = to the right of the value field on the same row,
+  // "below"  = on its own line under the row, "hidden" = not shown.
+  descriptionPlacement: "inline",
+  // Show the set/append/remove selector on every row. Off by default: the
+  // row's on/off switch denotes whether the header is set or unset.
+  showOperation: false,
+};
+
 // Popup resize bounds. Chrome caps extension popups at ~800x600, so we stay
 // under that to avoid the browser clipping or adding its own scrollbar.
 export const SIZE_LIMITS = {
-  minWidth: 360,
+  minWidth: 420,
   maxWidth: 780,
   minHeight: 320,
   maxHeight: 590,
-  defaultWidth: 470,
-  defaultHeight: 520,
+  defaultWidth: 620,
+  defaultHeight: 560,
 };
 
 export function uid() {
@@ -90,6 +103,7 @@ export function createDefaultState() {
     version: SCHEMA_VERSION,
     paused: false,
     theme: "system", // "system" | "light" | "dark"
+    settings: { ...DEFAULT_SETTINGS },
     popupWidth: SIZE_LIMITS.defaultWidth,
     popupHeight: null, // null = auto-height until the user drags to resize
     selectedProfileId: profile.id,
@@ -110,8 +124,11 @@ export function migrate(raw) {
   if (!raw || typeof raw !== "object") return raw;
   let s = raw;
   const from = Number(s.version) || 1;
+  if (from < 2) {
+    // Header-row layout preferences introduced.
+    s = { ...s, settings: { ...DEFAULT_SETTINGS } };
+  }
   // Future migrations, e.g.:
-  //   if (from < 2) { s = { ...s, someNewField: DEFAULT, version: 2 }; }
   //   if (from < 3) { ... }
   void from;
   return s;
@@ -147,6 +164,7 @@ export function normalizeState(raw) {
     version: SCHEMA_VERSION,
     paused: Boolean(raw.paused),
     theme: ["system", "light", "dark"].includes(raw.theme) ? raw.theme : "system",
+    settings: normalizeSettings(raw.settings),
     popupWidth: clampSize(
       raw.popupWidth,
       SIZE_LIMITS.minWidth,
@@ -184,6 +202,21 @@ function normalizeHeaders(arr) {
             ? h.comment
             : "",
     }));
+}
+
+function normalizeSettings(s) {
+  if (!s || typeof s !== "object") return { ...DEFAULT_SETTINGS };
+  return {
+    descriptionPlacement: DESCRIPTION_PLACEMENTS.includes(
+      s.descriptionPlacement,
+    )
+      ? s.descriptionPlacement
+      : DEFAULT_SETTINGS.descriptionPlacement,
+    showOperation:
+      typeof s.showOperation === "boolean"
+        ? s.showOperation
+        : DEFAULT_SETTINGS.showOperation,
+  };
 }
 
 function normalizeFilters(arr) {

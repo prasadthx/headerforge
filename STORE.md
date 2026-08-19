@@ -30,14 +30,14 @@ Zip only the files the extension needs (exclude dev/tooling/docs):
 
 ```bash
 cd /Users/prasadzore/tasks/scam-repo/headerforge
-zip -r ../headerforge-1.0.0.zip \
+zip -r ../headerforge-1.1.0.zip \
   manifest.json background.js state.js rules.js \
   popup.html popup.css popup.js \
   options.html options.css options.js \
   icons
 ```
 
-Upload `headerforge-1.0.0.zip` in the developer console.
+Upload `headerforge-1.1.0.zip` in the developer console.
 
 ## Listing content (ready to paste)
 

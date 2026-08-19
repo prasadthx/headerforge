@@ -15,15 +15,44 @@ let state;
 // ---------------------------------------------------------------------------
 // Theme (mirrors the popup so both surfaces look consistent).
 // ---------------------------------------------------------------------------
+// Toolbar icon variants (see popup.js for the same logic).
+const ICON_PATHS = {
+  light: {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+  },
+  dark: {
+    "16": "icons/icon16-dark.png",
+    "48": "icons/icon48-dark.png",
+    "128": "icons/icon128-dark.png",
+  },
+};
+
 function effectiveTheme(t) {
   if (t === "system") return darkMedia.matches ? "dark" : "light";
   return t;
 }
 function applyTheme() {
-  document.documentElement.setAttribute("data-theme", effectiveTheme(state.theme));
+  const theme = effectiveTheme(state.theme);
+  document.documentElement.setAttribute("data-theme", theme);
+  $("pageLogo").src = `icons/icon${theme === "dark" ? "128-dark" : "128"}.png`;
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
+  chrome.action?.setIcon?.({ path: ICON_PATHS[effectiveTheme(state.theme)] }).catch?.(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Header-row layout settings.
+// ---------------------------------------------------------------------------
+function applySettings() {
+  document
+    .querySelectorAll("[data-desc-opt]")
+    .forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.descOpt === state.settings.descriptionPlacement),
+    );
+  $("showOpChk").checked = state.settings.showOperation;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +152,7 @@ async function resetAll() {
   state = createDefaultState();
   await save();
   applyTheme();
+  applySettings();
   $("dataStatus").textContent = "All data reset to defaults.";
 }
 
@@ -133,6 +163,7 @@ async function init() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, UPDATE_KEY]);
   state = normalizeState(migrate(stored[STORAGE_KEY]));
   applyTheme();
+  applySettings();
 
   const version = chrome.runtime.getManifest().version;
   $("version").textContent = `v${version}`;
@@ -161,6 +192,18 @@ async function init() {
       await save();
       applyTheme();
     });
+  });
+
+  document.querySelectorAll("[data-desc-opt]").forEach((b) => {
+    b.addEventListener("click", async () => {
+      state.settings.descriptionPlacement = b.dataset.descOpt;
+      await save();
+      applySettings();
+    });
+  });
+  $("showOpChk").addEventListener("change", async () => {
+    state.settings.showOperation = $("showOpChk").checked;
+    await save();
   });
 
   $("exportBtn").addEventListener("click", exportProfiles);

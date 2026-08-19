@@ -14,10 +14,14 @@ everything stays in your browser.
 ## Features
 
 - **Request & response headers** — set, append, or remove any header.
-- **Per-header operation** — a `set` / `append` / `remove` selector on every row
-  (clearer than juggling separate "modify" vs "filter" lists).
-- **Per-header descriptions** — annotate what each header is for via an
-  expandable note. Metadata only — it's never sent as a real header.
+- **Simple rows** — name, value, and a per-header description in one row; an
+  on/off switch on every row denotes set / unset. A `set` / `append` / `remove`
+  selector is optional (off by default) and can be re-enabled in Settings.
+- **Per-header descriptions** — annotate what each header is for. By default the
+  description sits to the right of the value; move it below the row or hide it
+  from Settings.
+- **Fuzzy header search** — filter any profile's request/response headers by
+  name, value, description, or operation as you type.
 - **Profile sidebar** — profiles listed down the left; click to switch,
   double-click to rename, `+ New profile` to add. Each row has a hover **⋮ menu**
   to rename, duplicate, recolour, enable/disable, or delete that profile.

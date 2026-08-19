@@ -122,9 +122,21 @@ body.options {
   justify-content: space-between;
   gap: 12px;
 }
+.row-between--top {
+  align-items: flex-start;
+}
+.row-between + .row-between {
+  margin-top: 14px;
+}
 .row-label {
   font-size: 13px;
   font-weight: 600;
+}
+.row-note-text {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.4;
 }
 .row-value {
   font-size: 13px;

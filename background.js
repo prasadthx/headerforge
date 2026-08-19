@@ -76,6 +76,27 @@ async function updateBadge(state) {
   });
 }
 
+// Theme-aware toolbar icon. Chrome has no native light/dark icon support, so we
+// swap paths manually. The worker cannot resolve the "system" theme (no
+// matchMedia in service workers), so the popup picks the variant for that case.
+const ICON_PATHS = {
+  light: {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+  },
+  dark: {
+    "16": "icons/icon16-dark.png",
+    "48": "icons/icon48-dark.png",
+    "128": "icons/icon128-dark.png",
+  },
+};
+
+function setIconForTheme(state) {
+  if (state.theme === "system") return;
+  chrome.action.setIcon({ path: ICON_PATHS[state.theme] }).catch(() => {});
+}
+
 let syncing = Promise.resolve();
 
 // Serialize rule updates so rapid edits from the popup don't race each other.
@@ -116,6 +137,7 @@ async function doSyncRules() {
   }
 
   await updateBadge(state);
+  setIconForTheme(state);
 }
 
 // --- Lifecycle wiring -------------------------------------------------------

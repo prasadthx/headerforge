@@ -11,7 +11,7 @@
       <!-- Top bar -->
       <header class="topbar">
         <div class="brand">
-          <img src="icons/icon48.png" alt="" class="brand__logo" width="22" height="22" />
+          <img id="brandLogo" src="icons/icon48.png" alt="" class="brand__logo" width="22" height="22" />
           <span class="brand__name">HeaderForge</span>
         </div>
         <div class="topbar__actions">
@@ -40,6 +40,19 @@
 
       <!-- Error banner -->
       <div id="errorBanner" class="banner banner--error" hidden></div>
+
+      <!-- Fuzzy header search -->
+      <div class="searchbar">
+        <span class="searchbar__icon iconbtn__glyph" data-icon="search"></span>
+        <input
+          id="headerSearch"
+          class="search"
+          type="search"
+          placeholder="Search headers by name, value or description…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
 
       <!-- Workspace: profile sidebar (left) + header editor (right) -->
       <div class="workspace">
@@ -115,6 +128,106 @@
 
       <!-- Per-profile action menu (contents populated on open) -->
       <div id="profileMenu" class="menu" hidden></div>
+
+      <!-- In-popup settings panel (toggled by the gear button) -->
+      <section id="settingsPanel" class="settings" hidden>
+        <header class="settings__head">
+          <span class="settings__title">Settings</span>
+          <button id="settingsCloseBtn" class="iconbtn" title="Close settings">
+            <span class="iconbtn__glyph" data-icon="close"></span>
+          </button>
+        </header>
+
+        <div class="settings__body">
+          <!-- About -->
+          <section class="card">
+            <h2 class="card__title">About</h2>
+            <p class="card__text">
+              HeaderForge lets you add, modify, and remove HTTP request and
+              response headers on the sites you choose — organised into
+              colour-coded profiles with URL filters, per-header descriptions,
+              and JSON import/export. Everything stays on your device.
+            </p>
+            <div class="links">
+              <a class="btn" id="settingsRepoLink" href="#" target="_blank" rel="noopener">GitHub</a>
+              <a class="btn" id="settingsIssuesLink" href="#" target="_blank" rel="noopener">Report an issue</a>
+            </div>
+          </section>
+
+          <!-- Updates -->
+          <section class="card">
+            <h2 class="card__title">Updates</h2>
+            <div class="row-between">
+              <div>
+                <div class="row-label">Current version</div>
+                <div class="row-value" id="settingsVersion2">—</div>
+              </div>
+              <button class="btn" id="settingsCheckUpdateBtn">Check for updates</button>
+            </div>
+            <p class="status" id="settingsUpdateStatus"></p>
+          </section>
+
+          <!-- Appearance -->
+          <section class="card">
+            <h2 class="card__title">Appearance</h2>
+            <div class="row-between">
+              <div class="row-label">Theme</div>
+              <div class="seg" id="themeSeg">
+                <button data-theme-opt="system" class="seg__btn">System</button>
+                <button data-theme-opt="light" class="seg__btn">Light</button>
+                <button data-theme-opt="dark" class="seg__btn">Dark</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Header rows -->
+          <section class="card">
+            <h2 class="card__title">Header rows</h2>
+            <div class="row-between row-between--top">
+              <div>
+                <div class="row-label">Description field</div>
+                <div class="row-note-text">
+                  Where the per-header description sits in each row.
+                </div>
+              </div>
+              <div class="seg" id="descPlacementSeg">
+                <button data-desc-opt="inline" class="seg__btn">Next to value</button>
+                <button data-desc-opt="below" class="seg__btn">Below</button>
+                <button data-desc-opt="hidden" class="seg__btn">Hidden</button>
+              </div>
+            </div>
+            <div class="row-between row-between--top">
+              <div>
+                <div class="row-label">Operation selector</div>
+                <div class="row-note-text">
+                  When off, each row’s on/off switch denotes set / unset.
+                </div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="showOpChk" />
+                <span class="switch__track"><span class="switch__thumb"></span></span>
+              </label>
+            </div>
+          </section>
+
+          <!-- Data -->
+          <section class="card">
+            <h2 class="card__title">Data</h2>
+            <div class="links">
+              <button class="btn" id="settingsExportBtn">Export profiles</button>
+              <button class="btn" id="settingsImportBtn">Import profiles</button>
+              <button class="btn btn--danger" id="settingsResetBtn">Reset all data</button>
+            </div>
+            <p class="status" id="settingsStatus"></p>
+          </section>
+
+          <!-- About / full page -->
+          <p class="settings__about">
+            HeaderForge <span id="settingsVersion">v—</span> ·
+            <button class="linkbtn" id="fullOptionsBtn">Open full settings page</button>
+          </p>
+        </div>
+      </section>
 
       <!-- Drag-to-resize grip (bottom-left, since the popup is anchored top-right) -->
       <div id="resizeGrip" class="resize-grip" title="Drag to resize"></div>

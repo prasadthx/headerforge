@@ -9,8 +9,11 @@ import {
   makeUrlFilter,
   makeProfile,
   normalizeState,
+  migrate,
   createDefaultState,
 } from "./state.js";
+
+const REPO = "https://github.com/prasadthx/headerforge";
 
 // ---------------------------------------------------------------------------
 // Icons — inline SVGs applied as CSS masks so they inherit currentColor.
@@ -29,6 +32,12 @@ const ICONS = {
   // Gear — opens the About & settings page.
   settings:
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M19.14 12.94c.04-.31.06-.62.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.65 8.8a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94L2.77 14.5a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>',
+  // Magnifier — fuzzy header search.
+  search:
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>',
+  // X — closes the in-popup settings panel.
+  close:
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18.3 5.71 12 12.01 5.7 5.71 4.29 7.12 10.59 13.4 4.29 19.7l1.41 1.41 6.3-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.28z"/></svg>',
 };
 
 function svgMask(svg) {
@@ -68,7 +77,9 @@ const dom = {
   pauseBtn: $("pauseBtn"),
   pausedBanner: $("pausedBanner"),
   resumeBtn: $("resumeBtn"),
+  brandLogo: $("brandLogo"),
   errorBanner: $("errorBanner"),
+  headerSearch: $("headerSearch"),
   themeBtn: $("themeBtn"),
   requestRows: $("requestRows"),
   responseRows: $("responseRows"),
@@ -81,6 +92,20 @@ const dom = {
   importFile: $("importFile"),
   importHeadersFile: $("importHeadersFile"),
   optionsBtn: $("optionsBtn"),
+  settingsPanel: $("settingsPanel"),
+  settingsCloseBtn: $("settingsCloseBtn"),
+  settingsStatus: $("settingsStatus"),
+  settingsVersion: $("settingsVersion"),
+  fullOptionsBtn: $("fullOptionsBtn"),
+  settingsExportBtn: $("settingsExportBtn"),
+  settingsImportBtn: $("settingsImportBtn"),
+  settingsResetBtn: $("settingsResetBtn"),
+  settingsVersion2: $("settingsVersion2"),
+  settingsCheckUpdateBtn: $("settingsCheckUpdateBtn"),
+  settingsUpdateStatus: $("settingsUpdateStatus"),
+  settingsRepoLink: $("settingsRepoLink"),
+  settingsIssuesLink: $("settingsIssuesLink"),
+  showOpChk: $("showOpChk"),
   resizeGrip: $("resizeGrip"),
 };
 
@@ -92,6 +117,7 @@ let activeTab = "request";
 let saveTimer;
 let pendingHeaderKind = "request"; // which list a header-import targets
 let menuProfileId = null; // profile the open action menu belongs to
+let searchQuery = ""; // fuzzy header search term
 
 function currentProfile() {
   return (
@@ -130,17 +156,20 @@ function glyph(name) {
   return span;
 }
 
-function applyOpToPair(op, valueInput, pair) {
-  const isRemove = op === "remove";
-  valueInput.hidden = isRemove;
-  pair.style.gridTemplateColumns = isRemove ? "1fr" : "";
-}
-
 function headerRow(list, h) {
   const item = el("div", {
     class: "header-item" + (h.enabled ? "" : " is-disabled"),
   });
-  const row = el("div", { class: "row" });
+  const s = state.settings;
+  const showOp = s.showOperation;
+  const descInline = s.descriptionPlacement === "inline";
+
+  const row = el("div", {
+    class:
+      "row" +
+      (showOp ? " row--op" : "") +
+      (descInline ? "" : " row--nodesc"),
+  });
   row.dataset.id = h.id;
 
   const toggle = makeSwitch(h.enabled, (checked) => {
@@ -149,10 +178,7 @@ function headerRow(list, h) {
     save();
   });
   toggle.classList.add("row__toggle");
-
-  const op = el("select", { class: "op-select", title: "Operation" });
-  for (const o of OPERATIONS) op.append(el("option", { value: o, textContent: o }));
-  op.value = h.operation;
+  toggle.title = "Enable / disable this header";
 
   const nameInput = el("input", {
     class: "field",
@@ -177,46 +203,17 @@ function headerRow(list, h) {
     save();
   });
 
-  const pair = el("div", { class: "row__pair" }, [nameInput, valueInput]);
-  applyOpToPair(h.operation, valueInput, pair);
-  op.addEventListener("change", () => {
-    h.operation = op.value;
-    applyOpToPair(op.value, valueInput, pair);
-    save();
-  });
-
-  // Description / note (metadata only — never sent as a real header).
+  // Description (metadata only — never sent as a real header).
   const noteInput = el("input", {
-    class: "field note-input",
+    class: "field field--note",
     value: h.description || "",
-    placeholder: "Description — what this header is for (optional)",
+    placeholder: "Description (optional)",
     spellcheck: false,
     autocomplete: "off",
   });
   noteInput.addEventListener("input", () => {
     h.description = noteInput.value;
-    noteBtn.classList.toggle("is-active", noteInput.value.length > 0);
     save();
-  });
-  const noteLine = el("div", { class: "row-note" }, [noteInput]);
-  const hasNote = (h.description || "").length > 0;
-  noteLine.hidden = !hasNote;
-
-  const noteBtn = el(
-    "button",
-    {
-      class: "iconbtn iconbtn--sm notebtn" + (hasNote ? " is-active" : ""),
-      title: "Add a description",
-    },
-    [glyph("note")],
-  );
-  noteBtn.addEventListener("click", () => {
-    noteLine.hidden = !noteLine.hidden;
-    if (!noteLine.hidden) noteInput.focus();
-    noteBtn.classList.toggle(
-      "is-active",
-      !noteLine.hidden || (h.description || "").length > 0,
-    );
   });
 
   const del = el("button", { class: "delbtn", title: "Remove header" }, [
@@ -229,8 +226,25 @@ function headerRow(list, h) {
     renderPanels();
   });
 
-  row.append(toggle, op, pair, noteBtn, del);
-  item.append(row, noteLine);
+  if (showOp) {
+    const op = el("select", { class: "op-select", title: "Operation" });
+    for (const o of OPERATIONS) op.append(el("option", { value: o, textContent: o }));
+    op.value = h.operation;
+    op.addEventListener("change", () => {
+      h.operation = op.value;
+      save();
+    });
+    row.append(op);
+  }
+
+  row.append(toggle, nameInput, valueInput);
+  if (descInline) row.append(noteInput);
+  row.append(del);
+
+  item.append(row);
+  if (s.descriptionPlacement === "below") {
+    item.append(el("div", { class: "row-note" }, [noteInput]));
+  }
   return item;
 }
 
@@ -272,6 +286,36 @@ function filterRow(list, f) {
 }
 
 // ---------------------------------------------------------------------------
+// Fuzzy header search.
+// ---------------------------------------------------------------------------
+function isSubsequence(token, text) {
+  let i = 0;
+  for (const ch of text) {
+    if (ch === token[i]) i++;
+    if (i === token.length) return true;
+  }
+  return i === token.length;
+}
+
+// Match a query against a lowercased header haystack: plain substring wins,
+// otherwise every whitespace-separated token must appear as a subsequence
+// (so "xau" matches "x-auth-override", "bear" matches "Bearer …", etc.).
+function fuzzyMatch(query, text) {
+  const q = query.toLowerCase().trim();
+  if (!q) return true;
+  if (text.includes(q)) return true;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return (
+    tokens.length > 0 &&
+    tokens.every((t) => t.length >= 2 && isSubsequence(t, text))
+  );
+}
+
+function headerSearchText(h) {
+  return [h.name, h.value, h.description, h.operation].join(" ").toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
 // Rendering.
 // ---------------------------------------------------------------------------
 function fillRows(container, list, make, emptyMsg) {
@@ -285,17 +329,25 @@ function fillRows(container, list, make, emptyMsg) {
 
 function renderPanels() {
   const p = currentProfile();
+  const q = searchQuery;
+  const requestList = q
+    ? p.requestHeaders.filter((h) => fuzzyMatch(q, headerSearchText(h)))
+    : p.requestHeaders;
+  const responseList = q
+    ? p.responseHeaders.filter((h) => fuzzyMatch(q, headerSearchText(h)))
+    : p.responseHeaders;
+
   fillRows(
     dom.requestRows,
-    p.requestHeaders,
+    requestList,
     (h) => headerRow(p.requestHeaders, h),
-    "No request headers yet.",
+    q ? `No request headers match "${q}".` : "No request headers yet.",
   );
   fillRows(
     dom.responseRows,
-    p.responseHeaders,
+    responseList,
     (h) => headerRow(p.responseHeaders, h),
-    "No response headers yet.",
+    q ? `No response headers match "${q}".` : "No response headers yet.",
   );
   fillRows(
     dom.filterRows,
@@ -450,14 +502,36 @@ function clamp(v, min, max) {
 // ---------------------------------------------------------------------------
 const darkMedia = matchMedia("(prefers-color-scheme: dark)");
 
+// Toolbar icon variants. Chrome has no theme-aware icon support, so we swap
+// paths manually: the light icon is the dark purple square (for light toolbars),
+// the dark one is the light lavender variant (for dark toolbars).
+const ICON_PATHS = {
+  light: {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+  },
+  dark: {
+    "16": "icons/icon16-dark.png",
+    "48": "icons/icon48-dark.png",
+    "128": "icons/icon128-dark.png",
+  },
+};
+
 function effectiveTheme() {
   if (state.theme === "system") return darkMedia.matches ? "dark" : "light";
   return state.theme;
 }
 
 function applyTheme() {
-  document.documentElement.setAttribute("data-theme", effectiveTheme());
+  const theme = effectiveTheme();
+  document.documentElement.setAttribute("data-theme", theme);
+  dom.brandLogo.src = `icons/icon${theme === "dark" ? "48-dark" : "48"}.png`;
   dom.themeBtn.title = `Theme: ${state.theme} (click to change)`;
+  document
+    .querySelectorAll("[data-theme-opt]")
+    .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
+  chrome.action?.setIcon?.({ path: ICON_PATHS[effectiveTheme()] }).catch?.(() => {});
 }
 
 function cycleTheme() {
@@ -466,6 +540,74 @@ function cycleTheme() {
   save();
   applyTheme();
   toast(`Theme: ${state.theme}`);
+}
+
+// ---------------------------------------------------------------------------
+// In-popup settings panel.
+// ---------------------------------------------------------------------------
+function applySettingsUI() {
+  document
+    .querySelectorAll("[data-desc-opt]")
+    .forEach((b) =>
+      b.classList.toggle(
+        "is-active",
+        b.dataset.descOpt === state.settings.descriptionPlacement,
+      ),
+    );
+  dom.showOpChk.checked = state.settings.showOperation;
+}
+
+function openSettings() {
+  applyTheme();
+  applySettingsUI();
+  dom.settingsPanel.hidden = false;
+}
+
+function closeSettings() {
+  dom.settingsPanel.hidden = true;
+  dom.settingsStatus.textContent = "";
+}
+
+async function checkForUpdates() {
+  const status = dom.settingsUpdateStatus;
+  status.textContent = "Checking…";
+  try {
+    if (!chrome.runtime.requestUpdateCheck) {
+      status.textContent =
+        "Update checks are available once installed from the Chrome Web Store.";
+      return;
+    }
+    const res = await chrome.runtime.requestUpdateCheck();
+    const code = res && res.status ? res.status : res;
+    if (code === "update_available") {
+      status.textContent = `Update available${res.version ? ` (v${res.version})` : ""} — reloading…`;
+      chrome.runtime.reload();
+    } else if (code === "throttled") {
+      status.textContent = "Chrome is throttling update checks — try again shortly.";
+    } else {
+      status.textContent = "You’re on the latest version.";
+    }
+  } catch (_) {
+    status.textContent =
+      "Update checks are available once installed from the Chrome Web Store.";
+  }
+}
+
+async function resetAllData() {
+  if (
+    !confirm(
+      "Reset all data? This deletes every profile and header and cannot be undone.",
+    )
+  ) {
+    return;
+  }
+  state = createDefaultState();
+  save({ immediate: true });
+  applyTheme();
+  applySettingsUI();
+  renderAll();
+  closeSettings();
+  toast("All data reset to defaults");
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +743,11 @@ function selectProfile(id) {
 }
 
 function addItem(kind) {
+  // Drop an active search so the freshly added row is visible and focusable.
+  if (searchQuery) {
+    searchQuery = "";
+    dom.headerSearch.value = "";
+  }
   const p = currentProfile();
   if (kind === "request") p.requestHeaders.push(makeHeader());
   else if (kind === "response") p.responseHeaders.push(makeHeader());
@@ -882,8 +1029,54 @@ function wire() {
     renderPausedUI();
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
-  dom.optionsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  dom.optionsBtn.addEventListener("click", openSettings);
+  dom.settingsCloseBtn.addEventListener("click", closeSettings);
+  dom.fullOptionsBtn.addEventListener("click", () =>
+    chrome.runtime.openOptionsPage(),
+  );
   dom.addProfileBtn.addEventListener("click", addProfile);
+
+  // In-popup settings controls.
+  document.querySelectorAll("[data-theme-opt]").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.theme = b.dataset.themeOpt;
+      save();
+      applyTheme();
+      toast(`Theme: ${state.theme}`);
+    });
+  });
+  document.querySelectorAll("[data-desc-opt]").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.settings.descriptionPlacement = b.dataset.descOpt;
+      save();
+      applySettingsUI();
+      renderPanels();
+    });
+  });
+  dom.showOpChk.addEventListener("change", () => {
+    state.settings.showOperation = dom.showOpChk.checked;
+    save();
+    renderPanels();
+  });
+  dom.settingsExportBtn.addEventListener("click", exportProfiles);
+  dom.settingsImportBtn.addEventListener("click", () => dom.importFile.click());
+  dom.settingsResetBtn.addEventListener("click", resetAllData);
+  dom.settingsCheckUpdateBtn.addEventListener("click", checkForUpdates);
+  dom.settingsRepoLink.href = REPO;
+  dom.settingsIssuesLink.href = `${REPO}/issues`;
+
+  // Fuzzy header search.
+  dom.headerSearch.addEventListener("input", () => {
+    searchQuery = dom.headerSearch.value.trim();
+    renderPanels();
+  });
+  dom.headerSearch.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      dom.headerSearch.value = "";
+      searchQuery = "";
+      renderPanels();
+    }
+  });
 
   // Close the per-profile menu on any outside click.
   document.addEventListener("click", (e) => {
@@ -946,7 +1139,7 @@ async function init() {
   injectIcons();
   const stored = await chrome.storage.local.get([STORAGE_KEY, ERROR_KEY]);
   if (stored[STORAGE_KEY]) {
-    state = normalizeState(stored[STORAGE_KEY]);
+    state = normalizeState(migrate(stored[STORAGE_KEY]));
   } else {
     state = createDefaultState();
     await chrome.storage.local.set({ [STORAGE_KEY]: state });
@@ -957,6 +1150,8 @@ async function init() {
   renderAll();
   setActiveTab("request");
   renderErrors(stored[ERROR_KEY]);
+  dom.settingsVersion.textContent = `v${chrome.runtime.getManifest().version}`;
+  dom.settingsVersion2.textContent = chrome.runtime.getManifest().version;
 }
 
 init();
