@@ -41,16 +41,16 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 
 ## Listing content (ready to paste)
 
-**Name:** HeaderForge: HTTP Header Modifier
+**Name:** HeaderForge: ModHeader Alternative
 
 **Summary (≤132 chars):**
-> Add, modify, and remove HTTP request & response headers — with profiles, URL filters, descriptions, and JSON import/export.
+> A fast, private alternative to ModHeader — add, modify, and remove HTTP request & response headers with profiles, URL filters, and JSON import/export.
 
 **Category:** Developer Tools
 
 **Description:**
-> HeaderForge is a fast, private tool for modifying HTTP request and response
-> headers while you develop and test.
+> HeaderForge is a fast, private alternative to ModHeader for modifying HTTP
+> request and response headers while you develop and test.
 >
 > • Add, modify, or remove request & response headers (set / append / remove)
 > • Organise rules into colour-coded profiles you can toggle on/off
