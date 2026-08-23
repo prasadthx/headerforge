@@ -1,7 +1,7 @@
 # HeaderForge
 
 A fast, modern, open-source browser extension to **add, modify, and remove HTTP
-request & response headers** — a clean, self-hostable alternative to ModHeader.
+request and response headers** — a clean, open-source alternative to ModHeader.
 
 Built on Manifest V3 (`declarativeNetRequest`), so it works on current Chrome,
 Edge, Brave, and other Chromium browsers. No account, no telemetry, no paywall —
