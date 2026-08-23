@@ -41,7 +41,7 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 
 ## Listing content (ready to paste)
 
-**Name:** HeaderForge — Modify HTTP Headers
+**Name:** HeaderForge: HTTP Header Modifier
 
 **Summary (≤132 chars):**
 > Add, modify, and remove HTTP request & response headers — with profiles, URL filters, descriptions, and JSON import/export.
