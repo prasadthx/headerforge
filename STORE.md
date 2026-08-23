@@ -41,15 +41,15 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 
 ## Listing content (ready to paste)
 
-**Name:** HeaderForge: ModHeader Alternative
+**Name:** HeaderForge: HTTP Header Modifier (ModHeader Alternative)
 
 **Summary (≤132 chars):**
-> A fast, private alternative to ModHeader — add, modify, and remove HTTP request & response headers with profiles, URL filters, and JSON import/export.
+> Open-source alternative to ModHeader — add, modify, and remove HTTP request & response headers with profiles, URL filters, and JSON import/export.
 
 **Category:** Developer Tools
 
 **Description:**
-> HeaderForge is a fast, private alternative to ModHeader for modifying HTTP
+> HeaderForge is an open-source alternative to ModHeader for modifying HTTP
 > request and response headers while you develop and test.
 >
 > • Add, modify, or remove request & response headers (set / append / remove)
@@ -59,8 +59,8 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 > • Import/export as JSON; pause everything with one click
 > • Light / dark / system themes; resizable popup
 >
-> Private by design: no accounts, no analytics, no network requests. Everything
-> is stored locally on your device.
+> Open-source and private by design: no accounts, no analytics, no network
+> requests. Everything is stored locally on your device. Code is on GitHub.
 
 ## Privacy tab answers
 
