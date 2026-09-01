@@ -657,4 +657,102 @@ test("a run of additions never repeats a name", () => {
   assert.equal(new Set(names).size, names.length, "names must stay unique");
 });
 
+// A frozen snapshot of what shipped 1.1 persisted, so a future change to
+// normalizeState/migrate cannot silently drop a returning user's data. If this
+// test starts failing, an upgrade would lose something — fix the code, do not
+// "fix" the fixture.
+const V11_STORED = Object.freeze({
+  version: 2,
+  paused: true,
+  theme: "dark",
+  settings: { descriptionPlacement: "below", showOperation: true },
+  popupWidth: 700,
+  popupHeight: 480,
+  selectedProfileId: "keep-me",
+  profiles: [
+    {
+      id: "keep-me",
+      name: "Staging auth",
+      enabled: true,
+      color: "#6366f1",
+      requestHeaders: [
+        { id: "h1", enabled: true, name: "Authorization", value: "Bearer tok", operation: "set", description: "svc account" },
+        { id: "h2", enabled: false, name: "X-Debug", value: "1", operation: "set", description: "" },
+        { id: "h3", enabled: true, name: "Referer", value: "", operation: "remove", description: "" },
+      ],
+      responseHeaders: [
+        { id: "h4", enabled: true, name: "Access-Control-Allow-Origin", value: "*", operation: "set", description: "" },
+      ],
+      urlFilters: [{ id: "f1", enabled: true, pattern: ".*\\.staging\\.example\\.com/.*" }],
+    },
+    {
+      id: "dup-a",
+      name: "Staging auth",
+      enabled: true,
+      color: "#ec4899",
+      requestHeaders: [{ id: "h6", enabled: true, name: "X Bad Name", value: "v", operation: "set", description: "typo" }],
+      responseHeaders: [],
+      urlFilters: [],
+    },
+  ],
+});
+
+test("upgrading from 1.1 preserves every stored field", () => {
+  const out = normalizeState(migrate(structuredClone(V11_STORED)));
+
+  assert.equal(out.paused, true, "a paused extension must stay paused");
+  assert.equal(out.theme, "dark");
+  assert.deepEqual(out.settings, V11_STORED.settings, "layout settings must survive");
+  assert.equal(out.popupWidth, 700);
+  assert.equal(out.popupHeight, 480);
+  assert.equal(out.selectedProfileId, "keep-me");
+  assert.equal(out.profiles.length, V11_STORED.profiles.length);
+
+  for (const [i, before] of V11_STORED.profiles.entries()) {
+    const after = out.profiles[i];
+    assert.equal(after.id, before.id, "profile ids are stable across upgrade");
+    assert.equal(after.name, before.name, "names are not rewritten on load");
+    assert.equal(after.enabled, before.enabled);
+    assert.deepEqual(after.requestHeaders, before.requestHeaders, "request headers verbatim");
+    assert.deepEqual(after.responseHeaders, before.responseHeaders, "response headers verbatim");
+    assert.deepEqual(after.urlFilters, before.urlFilters, "url filters verbatim");
+  }
+
+  // Duplicate names are deliberately NOT renamed on load — uniqueness is
+  // enforced when the user adds/clones/renames/imports, not behind their back.
+  assert.equal(out.profiles[0].name, out.profiles[1].name);
+});
+
+test("entries the engine will not accept are kept in storage, only unapplied", () => {
+  // The 1.1 fixture contains "X Bad Name". 1.2 refuses to send it, but must not
+  // delete it: the user needs to see it to fix the typo.
+  const out = normalizeState(migrate(structuredClone(V11_STORED)));
+  const bad = out.profiles[1].requestHeaders[0];
+  assert.equal(bad.name, "X Bad Name");
+  assert.equal(bad.description, "typo");
+  const applied = compileRules(out, {}).flatMap((r) =>
+    (r.action.requestHeaders || []).map((h) => h.header),
+  );
+  assert.ok(!applied.includes("X Bad Name"), "must not be applied");
+});
+
+test("a pre-settings blob upgrades without losing anything", () => {
+  const v10 = {
+    version: 1,
+    paused: false,
+    theme: "system",
+    popupWidth: 470,
+    selectedProfileId: "p1",
+    profiles: [{ id: "p1", name: "Auth", enabled: true, color: "#6366f1",
+      requestHeaders: [{ id: "h1", enabled: true, name: "Authorization", value: "tok", operation: "set", description: "note" }],
+      responseHeaders: [], urlFilters: [] }],
+  };
+  const out = normalizeState(migrate(v10));
+  assert.deepEqual(out.settings, DEFAULT_SETTINGS, "settings backfilled");
+  assert.equal(out.version, SCHEMA_VERSION);
+  assert.equal(out.profiles[0].requestHeaders[0].description, "note");
+  assert.equal(out.profiles[0].id, "p1");
+  assert.equal(out.popupWidth, 470);
+});
+
 console.log(`\n${passed} tests passed`);
