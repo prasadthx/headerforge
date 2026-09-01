@@ -265,6 +265,10 @@ function headerRow(list, h) {
     renderPanels();
   });
 
+  // Toggle first, then the operation select: .row--op's grid is
+  // "auto auto 1fr 1fr 1fr auto", so appending the select ahead of the toggle
+  // pushed the switch out of the first column whenever the setting was on.
+  row.append(toggle);
   if (showOp) {
     const op = el("select", { class: "op-select", title: "Operation" });
     for (const o of OPERATIONS) op.append(el("option", { value: o, textContent: o }));
@@ -276,7 +280,7 @@ function headerRow(list, h) {
     row.append(op);
   }
 
-  row.append(toggle, nameInput, valueInput);
+  row.append(nameInput, valueInput);
   if (descInline) row.append(noteInput);
   row.append(del);
 
@@ -610,11 +614,10 @@ function applyTheme() {
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  const resolved = effectiveTheme();
-  chrome.action?.setIcon?.({ path: ICON_PATHS[resolved] }).catch?.(() => {});
+  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {});
   // Remember the resolution so the worker can pick the right icon on a cold
   // start, when it has no way to evaluate "system" itself.
-  chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: resolved });
+  chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: theme });
 }
 
 function cycleTheme() {
@@ -649,6 +652,7 @@ function openSettings() {
 function closeSettings() {
   dom.settingsPanel.hidden = true;
   dom.settingsStatus.textContent = "";
+  dom.settingsUpdateStatus.textContent = "";
 }
 
 async function checkForUpdates() {
@@ -987,12 +991,21 @@ async function importProfilesFromFile(file) {
     toast("Invalid JSON file");
     return;
   }
-  const incoming = Array.isArray(data) ? data : data.profiles;
+  // `data &&` matters: a file containing just `null` parses to null, and
+  // null.profiles threw an uncaught TypeError that swallowed the import.
+  const incoming = Array.isArray(data) ? data : data && data.profiles;
   if (!Array.isArray(incoming) || incoming.length === 0) {
     toast("No profiles found in file");
     return;
   }
   const adapted = incoming.map(adaptImportedProfile).filter(Boolean);
+  // Check before normalizeState: it backfills a default profile when it filters
+  // everything out, so an array of junk used to import a blank "Profile 1" and
+  // report success.
+  if (adapted.length === 0) {
+    toast("No profiles found in file");
+    return;
+  }
   const cleaned = normalizeState({ profiles: adapted }).profiles.map((p) => ({
     ...p,
     id: uid(),

@@ -10,6 +10,7 @@ import {
   SCHEMA_VERSION,
   SIZE_LIMITS,
   PROFILE_COLORS,
+  DEFAULT_SETTINGS,
 } from "../state.js";
 import {
   compileRules,
@@ -17,6 +18,7 @@ import {
   headerActions,
   countActiveHeaders,
   isValidHeaderName,
+  isValidHeaderValue,
   precedenceOrder,
   hasApplicableHeaders,
 } from "../rules.js";
@@ -535,6 +537,86 @@ test("group priority is uniform per profile, so a cap can sort by it", () => {
   for (const g of groups) {
     const prios = new Set(g.rules.map((r) => r.priority));
     assert.equal(prios.size, 1, `${g.profileName} spread across ${prios.size} priorities`);
+  }
+});
+
+test("migrate merges settings instead of replacing them", () => {
+  // Assigning DEFAULT_SETTINGS wholesale discarded whatever the blob already
+  // carried, silently reverting the user's choices.
+  const stored = {
+    version: 1,
+    profiles: [],
+    settings: { descriptionPlacement: "below", showOperation: true },
+  };
+  const out = normalizeState(migrate(stored));
+  assert.equal(out.settings.descriptionPlacement, "below");
+  assert.equal(out.settings.showOperation, true);
+
+  // A v1 blob with no settings still gets the defaults.
+  const bare = normalizeState(migrate({ version: 1, profiles: [] }));
+  assert.deepEqual(bare.settings, DEFAULT_SETTINGS);
+
+  // Junk in the settings slot still falls back, via normalizeSettings.
+  const junk = normalizeState(migrate({ version: 1, profiles: [], settings: "nope" }));
+  assert.deepEqual(junk.settings, DEFAULT_SETTINGS);
+});
+
+test("header values carrying CR, LF or NUL are skipped and reported", () => {
+  assert.ok(isValidHeaderValue("Bearer abc.def"));
+  assert.ok(isValidHeaderValue(""));
+  for (const bad of ["a\rb", "a\nb", "a\r\nb", "a\0b"]) {
+    assert.ok(!isValidHeaderValue(bad), `${JSON.stringify(bad)} must be rejected`);
+  }
+  const skipped = [];
+  const actions = headerActions(
+    [
+      makeHeader("X-Ok", "fine"),
+      makeHeader("X-Split", "value\r\nX-Injected: evil"),
+    ],
+    (name, reason) => skipped.push([name, reason]),
+  );
+  assert.deepEqual(actions.map((a) => a.header), ["X-Ok"]);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0][0], "X-Split");
+  assert.match(skipped[0][1], /line break/);
+});
+
+test("a remove operation is unaffected by value screening", () => {
+  // "remove" carries no value, so a stale one must not disqualify it.
+  const h = makeHeader("X-Gone", "left\nover", "remove");
+  const actions = headerActions([h]);
+  assert.deepEqual(actions, [{ header: "X-Gone", operation: "remove" }]);
+});
+
+test("only real CSS hex forms are accepted as profile colours", () => {
+  // 5- and 7-digit hex passed the old guard and then produced no colour at all.
+  const out = normalizeState({
+    profiles: [
+      { name: "five", color: "#12345", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "seven", color: "#1234567", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "three", color: "#abc", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "four", color: "#abcd", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "six", color: "#abcdef", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "eight", color: "#abcdef12", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+    ],
+  }).profiles;
+  const byName = Object.fromEntries(out.map((p) => [p.name, p.color]));
+  assert.ok(PROFILE_COLORS.includes(byName.five), "5-digit hex must fall back");
+  assert.ok(PROFILE_COLORS.includes(byName.seven), "7-digit hex must fall back");
+  assert.equal(byName.three, "#abc");
+  assert.equal(byName.four, "#abcd");
+  assert.equal(byName.six, "#abcdef");
+  assert.equal(byName.eight, "#abcdef12");
+});
+
+test("an array of junk yields no importable profiles", () => {
+  // normalizeState backfills a default when it filters everything out, so the
+  // import paths must decide emptiness from the input, not from its output.
+  for (const junk of [[1, 2, 3], ["a"], [null], [true]]) {
+    const usable = junk.filter((p) => p && typeof p === "object");
+    assert.equal(usable.length, 0, `${JSON.stringify(junk)} should yield nothing`);
+    // Demonstrates why the guard is needed at all:
+    assert.equal(normalizeState({ profiles: junk }).profiles.length, 1);
   }
 });
 
