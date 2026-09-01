@@ -14,6 +14,7 @@ import {
   ICON_PATHS,
   RESOLVED_THEME_KEY,
 } from "./state.js";
+import { precedenceOrder } from "./rules.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
 
@@ -108,6 +109,8 @@ const dom = {
   settingsRepoLink: $("settingsRepoLink"),
   settingsIssuesLink: $("settingsIssuesLink"),
   showOpChk: $("showOpChk"),
+  precedence: $("precedence"),
+  precedenceList: $("precedenceList"),
   resizeGrip: $("resizeGrip"),
 };
 
@@ -149,6 +152,11 @@ async function commit() {
 }
 
 function save({ immediate = false } = {}) {
+  // Every mutation funnels through here, so this is the one place that reliably
+  // catches anything affecting which profiles are live: selection, profile
+  // enable/disable, a header being toggled off, a name being typed into or out
+  // of validity. Cheap — it renders a handful of nodes off an O(headers) scan.
+  renderPrecedence();
   clearTimeout(saveTimer);
   if (immediate) return commit();
   saveTimer = setTimeout(commit, 200);
@@ -430,6 +438,56 @@ function renderPausedUI() {
   dom.pauseBtn.setAttribute("aria-pressed", String(state.paused));
   dom.pausedBanner.hidden = !state.paused;
   dom.pauseBtn.title = state.paused ? "Resume all headers" : "Pause all headers";
+  renderPrecedence();
+}
+
+// Show which profiles are actually applying headers and in what order they win
+// a conflict. Every enabled profile still applies; this only makes the
+// precedence — and the fact that the open profile outranks the rest — visible.
+const PRECEDENCE_SHOWN = 3;
+
+function renderPrecedence() {
+  const order = precedenceOrder(state);
+  dom.precedenceList.textContent = "";
+
+  if (order.length === 0) {
+    dom.precedence.title = state.paused
+      ? "Paused — no headers are being applied"
+      : "No profile is applying headers right now";
+    dom.precedenceList.append(
+      el("li", {
+        class: "precedence__empty",
+        textContent: state.paused ? "Paused" : "Nothing applied",
+      }),
+    );
+    return;
+  }
+
+  dom.precedence.title =
+    order.length === 1
+      ? `Only "${order[0].name}" is applying headers`
+      : `Headers from higher entries win when profiles set the same header:\n${order
+          .map((p, i) => `${i + 1}. ${p.name}`)
+          .join("\n")}`;
+
+  order.slice(0, PRECEDENCE_SHOWN).forEach((p, i) => {
+    const rank = el("span", { class: "precedence__rank", textContent: i + 1 });
+    if (i > 0) rank.style.background = `color-mix(in srgb, ${p.color} 30%, transparent)`;
+    dom.precedenceList.append(
+      el(
+        "li",
+        { class: "precedence__item" + (i === 0 ? " precedence__item--top" : "") },
+        [rank, el("span", { class: "precedence__name", textContent: p.name })],
+      ),
+    );
+  });
+
+  const hidden = order.length - PRECEDENCE_SHOWN;
+  if (hidden > 0) {
+    dom.precedenceList.append(
+      el("li", { class: "precedence__more", textContent: `+${hidden} more` }),
+    );
+  }
 }
 
 function renderErrors(errors) {
@@ -453,6 +511,7 @@ function renderErrors(errors) {
 
 function renderAll() {
   renderSidebar();
+  renderPrecedence();
   renderPanels();
   renderPausedUI();
 }

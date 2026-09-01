@@ -16,6 +16,8 @@ import {
   headerActions,
   countActiveHeaders,
   isValidHeaderName,
+  precedenceOrder,
+  hasApplicableHeaders,
 } from "../rules.js";
 
 let passed = 0;
@@ -29,7 +31,9 @@ function test(name, fn) {
 function assertValidRule(rule) {
   assert.equal(typeof rule.id, "number");
   assert.ok(rule.id > 0, "rule id must be positive");
-  assert.equal(rule.priority, 1);
+  // Priority now encodes profile precedence, so only the invariant holds:
+  // a positive integer that declarativeNetRequest will accept.
+  assert.ok(Number.isInteger(rule.priority) && rule.priority >= 1);
   assert.equal(rule.action.type, "modifyHeaders");
   assert.equal(typeof rule.condition, "object");
   assert.ok(Array.isArray(rule.condition.resourceTypes));
@@ -405,6 +409,95 @@ test("countActiveHeaders ignores headers that cannot compile", () => {
   const state = normalizeState({ profiles: [p] });
   // Badge must match what is actually applied, not what was typed.
   assert.equal(countActiveHeaders(state), 2);
+});
+
+test("hasApplicableHeaders ignores disabled, unnamed and malformed entries", () => {
+  const empty = makeProfile("Empty", 0);
+  empty.requestHeaders = [makeHeader("", "")];
+  assert.equal(hasApplicableHeaders(empty), false);
+
+  const off = makeProfile("Off", 0);
+  off.requestHeaders = [makeHeader("X-A", "1")];
+  off.requestHeaders[0].enabled = false;
+  assert.equal(hasApplicableHeaders(off), false);
+
+  const bad = makeProfile("Bad", 0);
+  bad.requestHeaders = [makeHeader("X Bad", "1")];
+  assert.equal(hasApplicableHeaders(bad), false);
+
+  const good = makeProfile("Good", 0);
+  good.responseHeaders = [makeHeader("X-B", "1")];
+  assert.equal(hasApplicableHeaders(good), true);
+});
+
+test("precedenceOrder promotes the selected profile to the front", () => {
+  const a = makeProfile("A", 0);
+  a.requestHeaders = [makeHeader("X-A", "1")];
+  const b = makeProfile("B", 1);
+  b.requestHeaders = [makeHeader("X-B", "2")];
+  const c = makeProfile("C", 2);
+  c.requestHeaders = [makeHeader("X-C", "3")];
+  const state = normalizeState({ profiles: [a, b, c] });
+
+  // Nothing selected -> plain sidebar order.
+  assert.deepEqual(
+    precedenceOrder({ ...state, selectedProfileId: null }).map((p) => p.name),
+    ["A", "B", "C"],
+  );
+  // Selecting the last one moves it to the front; the rest keep their order.
+  state.selectedProfileId = state.profiles[2].id;
+  assert.deepEqual(precedenceOrder(state).map((p) => p.name), ["C", "A", "B"]);
+  // Paused means nothing is live at all.
+  assert.deepEqual(precedenceOrder({ ...state, paused: true }), []);
+});
+
+test("precedenceOrder excludes profiles that contribute nothing", () => {
+  const live = makeProfile("Live", 0);
+  live.requestHeaders = [makeHeader("X-Live", "1")];
+  const dead = makeProfile("Dead", 1);
+  dead.requestHeaders = [makeHeader("X Bad", "1")];
+  const disabled = makeProfile("Disabled", 2);
+  disabled.enabled = false;
+  disabled.requestHeaders = [makeHeader("X-D", "1")];
+  const state = normalizeState({ profiles: [live, dead, disabled] });
+  assert.deepEqual(precedenceOrder(state).map((p) => p.name), ["Live"]);
+});
+
+test("the selected profile outranks the others in compiled priority", () => {
+  const a = makeProfile("A", 0);
+  a.requestHeaders = [makeHeader("X-Shared", "from-a")];
+  const b = makeProfile("B", 1);
+  b.requestHeaders = [makeHeader("X-Shared", "from-b")];
+  const c = makeProfile("C", 2);
+  c.requestHeaders = [makeHeader("X-Shared", "from-c")];
+  const state = normalizeState({ profiles: [a, b, c] });
+  state.selectedProfileId = state.profiles[1].id; // select B
+
+  const groups = compileRuleGroups(state, {});
+  const byName = Object.fromEntries(
+    groups.map((g) => [g.profileName, g.rules[0].priority]),
+  );
+  // B is selected so it must win the X-Shared conflict outright.
+  assert.ok(byName.B > byName.A, "selected profile must outrank A");
+  assert.ok(byName.B > byName.C, "selected profile must outrank C");
+  // Remaining profiles keep sidebar order relative to each other.
+  assert.ok(byName.A > byName.C, "A precedes C in the sidebar");
+  // Priorities must be distinct, so the engine never has to break a tie.
+  const values = Object.values(byName);
+  assert.equal(new Set(values).size, values.length, "priorities must be distinct");
+  for (const v of values) assert.ok(Number.isInteger(v) && v >= 1);
+});
+
+test("a profile whose only header is malformed is still reported", () => {
+  // It contributes no rules, so it is absent from precedenceOrder — the report
+  // must not go missing with it.
+  const bad = makeProfile("OnlyBad", 0);
+  bad.requestHeaders = [makeHeader("X Bad", "1")];
+  const state = normalizeState({ profiles: [bad] });
+  const seen = [];
+  const rules = compileRules(state, {}, (p, name) => seen.push([p.name, name]));
+  assert.equal(rules.length, 0);
+  assert.deepEqual(seen, [["OnlyBad", "X Bad"]]);
 });
 
 console.log(`\n${passed} tests passed`);

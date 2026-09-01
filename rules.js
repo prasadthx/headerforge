@@ -35,6 +35,31 @@ export function headerActions(headers, onSkip) {
   return out;
 }
 
+// Does this profile contribute anything the engine will accept? Uses the same
+// predicate as headerActions so the sidebar, the badge and the compiled rules
+// can never disagree about which profiles are live.
+export function hasApplicableHeaders(profile) {
+  for (const h of [...profile.requestHeaders, ...profile.responseHeaders]) {
+    if (h.enabled && isValidHeaderName((h.name || "").trim())) return true;
+  }
+  return false;
+}
+
+// The profiles actually applying headers, highest precedence first.
+//
+// Every enabled profile still applies — stacking an auth profile with a CORS
+// profile keeps working — but when two of them set the same header the winner
+// used to be undefined, because every rule was emitted with priority 1. The
+// selected profile is promoted to the front: the one open in the popup is the
+// one the user is reasoning about, so its value should be the one that lands.
+export function precedenceOrder(state) {
+  if (!state || state.paused) return [];
+  const live = state.profiles.filter((p) => p.enabled && hasApplicableHeaders(p));
+  const selected = live.find((p) => p.id === state.selectedProfileId);
+  if (!selected) return live;
+  return [selected, ...live.filter((p) => p.id !== selected.id)];
+}
+
 // Build dynamic rules grouped by profile. `validPatternsByProfileId` maps a
 // profile id to the list of URL regexes that already passed engine validation
 // (done by the caller, which has access to isRegexSupported).
@@ -46,7 +71,15 @@ export function compileRuleGroups(state, validPatternsByProfileId = {}, onSkip) 
   const groups = [];
   if (!state || state.paused) return groups;
 
+  const order = precedenceOrder(state);
+  // Higher number wins. declarativeNetRequest resolves competing modifyHeaders
+  // rules by priority, so distinct descending values make the outcome
+  // deterministic rather than leaving it to the engine's tie-break.
+  const rank = new Map(order.map((p, i) => [p.id, order.length - i]));
+
   let id = 1;
+  // Walk every enabled profile, not just the live ones, so a malformed header
+  // name is still reported even when its profile ends up contributing nothing.
   for (const profile of state.profiles) {
     if (!profile.enabled) continue;
 
@@ -61,20 +94,21 @@ export function compileRuleGroups(state, validPatternsByProfileId = {}, onSkip) 
     if (requestHeaders.length) action.requestHeaders = requestHeaders;
     if (responseHeaders.length) action.responseHeaders = responseHeaders;
 
+    const priority = rank.get(profile.id) || 1;
     const patterns = validPatternsByProfileId[profile.id] || [];
     const rules =
       patterns.length === 0
         ? [
             {
               id: id++,
-              priority: 1,
+              priority,
               action,
               condition: { resourceTypes: RESOURCE_TYPES },
             },
           ]
         : patterns.map((regexFilter) => ({
             id: id++,
-            priority: 1,
+            priority,
             action,
             condition: { regexFilter, resourceTypes: RESOURCE_TYPES },
           }));
