@@ -58,8 +58,25 @@ function applySettings() {
 // ---------------------------------------------------------------------------
 // Persistence.
 // ---------------------------------------------------------------------------
-async function save() {
+// Read-modify-write, never blind-write.
+//
+// This page lives in a tab, so its `state` can be minutes stale. Writing that
+// snapshot wholesale silently reverted anything the popup had changed in the
+// meantime: a paused extension resumed itself (headers started flowing again on
+// sites the user had explicitly paused) and newly added profiles vanished.
+// `mutate` receives freshly-read state and returns the version to persist, so
+// each caller only ever overwrites the fields it actually owns.
+async function save(mutate) {
+  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  const base = normalizeState(migrate(stored[STORAGE_KEY]));
+  state = normalizeState(mutate ? mutate(base) : base);
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  try {
+    // storage.onChanged is not a reliable wake-up for a dormant MV3 worker.
+    await chrome.runtime.sendMessage({ type: "resync" });
+  } catch {
+    /* no receiver; the worker syncs on spin-up */
+  }
 }
 
 function download(filename, text) {
@@ -136,8 +153,7 @@ async function importProfiles(file) {
     ...p,
     id: uid(),
   }));
-  state.profiles.push(...cleaned);
-  await save();
+  await save((s) => ({ ...s, profiles: [...s.profiles, ...cleaned] }));
   status.textContent = `Imported ${cleaned.length} profile${cleaned.length === 1 ? "" : "s"}.`;
 }
 
@@ -149,8 +165,7 @@ async function resetAll() {
   ) {
     return;
   }
-  state = createDefaultState();
-  await save();
+  await save(() => createDefaultState());
   applyTheme();
   applySettings();
   $("dataStatus").textContent = "All data reset to defaults.";
@@ -188,22 +203,23 @@ async function init() {
 
   document.querySelectorAll("[data-theme-opt]").forEach((b) => {
     b.addEventListener("click", async () => {
-      state.theme = b.dataset.themeOpt;
-      await save();
+      await save((s) => ({ ...s, theme: b.dataset.themeOpt }));
       applyTheme();
     });
   });
 
   document.querySelectorAll("[data-desc-opt]").forEach((b) => {
     b.addEventListener("click", async () => {
-      state.settings.descriptionPlacement = b.dataset.descOpt;
-      await save();
+      await save((s) => ({
+        ...s,
+        settings: { ...s.settings, descriptionPlacement: b.dataset.descOpt },
+      }));
       applySettings();
     });
   });
   $("showOpChk").addEventListener("change", async () => {
-    state.settings.showOperation = $("showOpChk").checked;
-    await save();
+    const showOperation = $("showOpChk").checked;
+    await save((s) => ({ ...s, settings: { ...s.settings, showOperation } }));
   });
 
   $("exportBtn").addEventListener("click", exportProfiles);
@@ -217,6 +233,15 @@ async function init() {
 
   darkMedia.addEventListener("change", () => {
     if (state.theme === "system") applyTheme();
+  });
+
+  // The popup can change the shared state while this tab sits open. Adopt it so
+  // the page never displays values it no longer owns.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[STORAGE_KEY]) return;
+    state = normalizeState(migrate(changes[STORAGE_KEY].newValue));
+    applyTheme();
+    applySettings();
   });
 }
 

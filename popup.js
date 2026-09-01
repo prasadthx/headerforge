@@ -126,16 +126,36 @@ function currentProfile() {
   );
 }
 
+// Persist, then explicitly nudge the service worker.
+//
+// storage.onChanged is the background's only other trigger, and it is NOT a
+// reliable wake-up for a *dormant* MV3 worker: after ~30s idle Chrome tears the
+// worker down, and a storage write from the popup can be dropped without ever
+// dispatching the event. When that happened, doSyncRules never ran at all — so
+// pausing left the old rules applied and the badge showing the old count, and
+// the only way out was restarting the extension (which re-runs syncRules at
+// module scope). runtime.sendMessage does reliably wake the worker, so we send
+// it after the write has landed.
+async function commit() {
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  try {
+    await chrome.runtime.sendMessage({ type: "resync" });
+  } catch {
+    // No receiver (worker still starting, or the popup closed first). The
+    // storage write is already durable and the worker syncs on spin-up.
+  }
+}
+
 function save({ immediate = false } = {}) {
   clearTimeout(saveTimer);
-  const commit = () => chrome.storage.local.set({ [STORAGE_KEY]: state });
-  if (immediate) commit();
-  else saveTimer = setTimeout(commit, 200);
+  if (immediate) return commit();
+  saveTimer = setTimeout(commit, 200);
+  return Promise.resolve();
 }
 
 async function flush() {
   clearTimeout(saveTimer);
-  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  await commit();
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +427,7 @@ function renderSidebar() {
 function renderPausedUI() {
   dom.pauseBtn.setAttribute("aria-pressed", String(state.paused));
   dom.pausedBanner.hidden = !state.paused;
+  dom.pauseBtn.title = state.paused ? "Resume all headers" : "Pause all headers";
 }
 
 function renderErrors(errors) {
@@ -1018,15 +1039,18 @@ function toast(msg) {
 // Wiring.
 // ---------------------------------------------------------------------------
 function wire() {
-  dom.pauseBtn.addEventListener("click", () => {
+  // Render first, then await the write: pausing is the one action where the user
+  // routinely closes the popup immediately afterwards, and the worker nudge in
+  // commit() has to be dispatched before the document is torn down.
+  dom.pauseBtn.addEventListener("click", async () => {
     state.paused = !state.paused;
-    save({ immediate: true });
     renderPausedUI();
+    await save({ immediate: true });
   });
-  dom.resumeBtn.addEventListener("click", () => {
+  dom.resumeBtn.addEventListener("click", async () => {
     state.paused = false;
-    save({ immediate: true });
     renderPausedUI();
+    await save({ immediate: true });
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
   dom.optionsBtn.addEventListener("click", openSettings);
@@ -1121,8 +1145,23 @@ function wire() {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[ERROR_KEY]) {
+    if (area !== "local") return;
+    if (changes[ERROR_KEY]) {
       renderErrors(changes[ERROR_KEY].newValue);
+    }
+    // The About & settings tab may have changed the shared state. Adopt it
+    // rather than writing our own snapshot back over it on the next save.
+    // Skipped while an edit is still queued, so an in-progress keystroke is
+    // never yanked out from under the user.
+    if (changes[STORAGE_KEY] && !saveTimer) {
+      const incoming = normalizeState(migrate(changes[STORAGE_KEY].newValue));
+      // Our own writes echo back here; ignore those.
+      if (JSON.stringify(incoming) === JSON.stringify(state)) return;
+      state = incoming;
+      applyTheme();
+      applySize();
+      applySettingsUI();
+      renderAll();
     }
   });
 

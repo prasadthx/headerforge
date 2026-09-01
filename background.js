@@ -98,15 +98,39 @@ function setIconForTheme(state) {
 }
 
 let syncing = Promise.resolve();
+let queued = false;
 
 // Serialize rule updates so rapid edits from the popup don't race each other.
+// Coalesce them too: every state change now arrives twice (once via
+// storage.onChanged, once via the popup's explicit "resync" nudge), and
+// doSyncRules always re-reads the latest state, so a sync that has not started
+// yet will already pick up whatever landed after it was queued.
 function syncRules() {
-  syncing = syncing.then(doSyncRules).catch((e) => console.error(e));
+  if (queued) return syncing;
+  queued = true;
+  syncing = syncing
+    .then(() => {
+      queued = false;
+      return doSyncRules();
+    })
+    .catch((e) => {
+      queued = false;
+      console.error(e);
+    });
   return syncing;
 }
 
 async function doSyncRules() {
   const state = await loadState();
+
+  // Paint the badge and icon FIRST. Both derive purely from `state`, so they
+  // have no reason to wait on the declarativeNetRequest round-trips below.
+  // Doing them last meant that if the worker was torn down mid-sync, the rules
+  // had already been applied while the badge still showed the previous count —
+  // and nothing repainted it until the extension was restarted.
+  await updateBadge(state);
+  setIconForTheme(state);
+
   const { byProfile, errors } = await validatePatterns(state);
   const rules = compileRules(state, byProfile);
 
@@ -135,9 +159,6 @@ async function doSyncRules() {
       ],
     });
   }
-
-  await updateBadge(state);
-  setIconForTheme(state);
 }
 
 // --- Lifecycle wiring -------------------------------------------------------
@@ -157,9 +178,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await syncRules();
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  syncRules();
-});
+chrome.runtime.onStartup.addListener(() => syncRules());
 
 // When Chrome has a newer version staged, record it so the UI can offer a
 // one-click reload instead of waiting for the next browser restart.
@@ -168,9 +187,12 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
 });
 
 // The popup persists edits to storage; rebuild rules whenever they change.
-chrome.storage.onChanged.addListener((changes, area) => {
+// Returning the promise matters: a fire-and-forget call left Chrome unaware that
+// async work was still pending, so the worker's idle timer could expire partway
+// through the sync and strand the badge on a stale count.
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === "local" && changes[STORAGE_KEY]) {
-    syncRules();
+    await syncRules();
   }
 });
 
