@@ -9,6 +9,10 @@
 export const STORAGE_KEY = "headerforge:v1";
 export const ERROR_KEY = "headerforge:errors";
 export const UPDATE_KEY = "headerforge:updateReady";
+// Last theme the UI actually resolved "system" to. Service workers have no
+// matchMedia, so the worker cannot work it out itself; the UI records it here so
+// the worker can still pick the right icon on a cold start.
+export const RESOLVED_THEME_KEY = "headerforge:resolvedTheme";
 
 // Bump when the persisted shape changes, and add a matching step in migrate().
 export const SCHEMA_VERSION = 2;
@@ -45,6 +49,22 @@ export const RESOURCE_TYPES = [
   "websocket",
   "other",
 ];
+
+// Toolbar icon variants. Chrome has no native light/dark action icon, so the
+// path is swapped manually. Shared by the popup, options page and worker so the
+// three cannot drift apart.
+export const ICON_PATHS = {
+  light: {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png",
+  },
+  dark: {
+    "16": "icons/icon16-dark.png",
+    "48": "icons/icon48-dark.png",
+    "128": "icons/icon128-dark.png",
+  },
+};
 
 export const OPERATIONS = ["set", "append", "remove"];
 

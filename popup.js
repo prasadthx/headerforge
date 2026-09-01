@@ -11,6 +11,8 @@ import {
   normalizeState,
   migrate,
   createDefaultState,
+  ICON_PATHS,
+  RESOLVED_THEME_KEY,
 } from "./state.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
@@ -530,19 +532,6 @@ const darkMedia = matchMedia("(prefers-color-scheme: dark)");
 // Toolbar icon variants. Chrome has no theme-aware icon support, so we swap
 // paths manually: the light icon is the dark purple square (for light toolbars),
 // the dark one is the light lavender variant (for dark toolbars).
-const ICON_PATHS = {
-  light: {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-  },
-  dark: {
-    "16": "icons/icon16-dark.png",
-    "48": "icons/icon48-dark.png",
-    "128": "icons/icon128-dark.png",
-  },
-};
-
 function effectiveTheme() {
   if (state.theme === "system") return darkMedia.matches ? "dark" : "light";
   return state.theme;
@@ -556,7 +545,11 @@ function applyTheme() {
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  chrome.action?.setIcon?.({ path: ICON_PATHS[effectiveTheme()] }).catch?.(() => {});
+  const resolved = effectiveTheme();
+  chrome.action?.setIcon?.({ path: ICON_PATHS[resolved] }).catch?.(() => {});
+  // Remember the resolution so the worker can pick the right icon on a cold
+  // start, when it has no way to evaluate "system" itself.
+  chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: resolved });
 }
 
 function cycleTheme() {

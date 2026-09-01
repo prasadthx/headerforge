@@ -5,6 +5,8 @@ import {
   migrate,
   createDefaultState,
   uid,
+  ICON_PATHS,
+  RESOLVED_THEME_KEY,
 } from "./state.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
@@ -15,20 +17,6 @@ let state;
 // ---------------------------------------------------------------------------
 // Theme (mirrors the popup so both surfaces look consistent).
 // ---------------------------------------------------------------------------
-// Toolbar icon variants (see popup.js for the same logic).
-const ICON_PATHS = {
-  light: {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-  },
-  dark: {
-    "16": "icons/icon16-dark.png",
-    "48": "icons/icon48-dark.png",
-    "128": "icons/icon128-dark.png",
-  },
-};
-
 function effectiveTheme(t) {
   if (t === "system") return darkMedia.matches ? "dark" : "light";
   return t;
@@ -40,7 +28,8 @@ function applyTheme() {
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  chrome.action?.setIcon?.({ path: ICON_PATHS[effectiveTheme(state.theme)] }).catch?.(() => {});
+  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {});
+  chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: theme });
 }
 
 // ---------------------------------------------------------------------------

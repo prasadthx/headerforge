@@ -8,6 +8,8 @@ import {
   STORAGE_KEY,
   ERROR_KEY,
   UPDATE_KEY,
+  RESOLVED_THEME_KEY,
+  ICON_PATHS,
   normalizeState,
   createDefaultState,
   migrate,
@@ -86,25 +88,19 @@ async function updateBadge(state) {
   });
 }
 
-// Theme-aware toolbar icon. Chrome has no native light/dark icon support, so we
-// swap paths manually. The worker cannot resolve the "system" theme (no
-// matchMedia in service workers), so the popup picks the variant for that case.
-const ICON_PATHS = {
-  light: {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-  },
-  dark: {
-    "16": "icons/icon16-dark.png",
-    "48": "icons/icon48-dark.png",
-    "128": "icons/icon128-dark.png",
-  },
-};
-
-function setIconForTheme(state) {
-  if (state.theme === "system") return;
-  chrome.action.setIcon({ path: ICON_PATHS[state.theme] }).catch(() => {});
+// Theme-aware toolbar icon. Service workers have no matchMedia, so "system"
+// cannot be resolved here; the UI records what it resolved to under
+// RESOLVED_THEME_KEY and we reuse that. Previously the worker simply gave up on
+// "system" (the default), leaving the manifest's light icon in place — and
+// because setIcon does not survive a browser restart, dark-mode users got the
+// light icon on every restart until they happened to open the popup.
+async function setIconForTheme(state) {
+  let theme = state.theme;
+  if (theme === "system") {
+    const stored = await chrome.storage.local.get(RESOLVED_THEME_KEY);
+    theme = stored[RESOLVED_THEME_KEY] === "dark" ? "dark" : "light";
+  }
+  await chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
 }
 
 let syncing = Promise.resolve();
@@ -192,7 +188,7 @@ async function doSyncRules() {
   // had already been applied while the badge still showed the previous count —
   // and nothing repainted it until the extension was restarted.
   await updateBadge(state);
-  setIconForTheme(state);
+  await setIconForTheme(state);
 
   const { byProfile, errors } = await validatePatterns(state);
   const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
