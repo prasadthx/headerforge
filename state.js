@@ -135,7 +135,7 @@ export function createDefaultState() {
 // profile carrying something like "url(https://…)" would make the popup fetch a
 // remote resource. Only accept hex literals; anything else falls back to the
 // palette.
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 function safeColor(c, i) {
   const v = typeof c === "string" ? c.trim() : "";
@@ -156,12 +156,14 @@ export function migrate(raw) {
   let s = raw;
   const from = Number(s.version) || 1;
   if (from < 2) {
-    // Header-row layout preferences introduced.
-    s = { ...s, settings: { ...DEFAULT_SETTINGS } };
+    // Header-row layout preferences introduced. Merge rather than replace:
+    // assigning DEFAULT_SETTINGS wholesale discarded any the blob already
+    // carried, which silently reverted the user's choices. normalizeSettings
+    // validates whatever survives, so passing the raw values through is safe.
+    s = { ...s, settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) } };
   }
   // Future migrations, e.g.:
   //   if (from < 3) { ... }
-  void from;
   return s;
 }
 

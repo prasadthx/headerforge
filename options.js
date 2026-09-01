@@ -143,7 +143,14 @@ async function importProfiles(file) {
     status.textContent = "No profiles found in that file.";
     return;
   }
-  const cleaned = normalizeState({ profiles: incoming }).profiles.map((p) => ({
+  // Filter before normalizeState: it backfills a default profile when it
+  // discards every entry, so an array of junk imported a blank "Profile 1".
+  const usable = incoming.filter((p) => p && typeof p === "object");
+  if (usable.length === 0) {
+    status.textContent = "No profiles found in that file.";
+    return;
+  }
+  const cleaned = normalizeState({ profiles: usable }).profiles.map((p) => ({
     ...p,
     id: uid(),
   }));

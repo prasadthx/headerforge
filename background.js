@@ -134,7 +134,9 @@ function syncRules() {
 
 // declarativeNetRequest caps dynamic rules. Going over rejects the entire
 // batch, which previously meant every profile lost its headers at once, so trim
-// deterministically in profile order and say exactly what was dropped.
+// in precedence order (see doSyncRules) and say exactly what was dropped. The
+// unsafe-rule cap is used when exposed: it is the lower of the two, so trimming
+// against it is conservative.
 function ruleCap() {
   const dnr = chrome.declarativeNetRequest;
   return (

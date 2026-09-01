@@ -13,6 +13,14 @@ export function isValidHeaderName(name) {
   return HEADER_TOKEN_RE.test(name);
 }
 
+// CR, LF and NUL terminate or split a header on the wire, so a value carrying
+// them is never legitimate. Screen them here rather than trusting the engine.
+const HEADER_VALUE_INVALID_RE = /[\r\n\0]/;
+
+export function isValidHeaderValue(value) {
+  return !HEADER_VALUE_INVALID_RE.test(value);
+}
+
 // Convert a list of header entries into declarativeNetRequest header actions.
 // Disabled, unnamed and malformed entries are dropped; "remove" carries no
 // value. `onSkip(name, reason)` is called for anything dropped as invalid.
@@ -29,7 +37,12 @@ export function headerActions(headers, onSkip) {
     if (h.operation === "remove") {
       out.push({ header: name, operation: "remove" });
     } else {
-      out.push({ header: name, operation: h.operation, value: h.value ?? "" });
+      const value = h.value ?? "";
+      if (!isValidHeaderValue(value)) {
+        if (onSkip) onSkip(name, "Header value has a line break — skipped");
+        continue;
+      }
+      out.push({ header: name, operation: h.operation, value });
     }
   }
   return out;
