@@ -12,7 +12,7 @@ import {
   createDefaultState,
   migrate,
 } from "./state.js";
-import { compileRules, countActiveHeaders } from "./rules.js";
+import { compileRuleGroups, countActiveHeaders } from "./rules.js";
 
 async function loadState() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
@@ -36,23 +36,33 @@ async function isRegexOk(pattern) {
 async function validatePatterns(state) {
   const byProfile = {};
   const errors = [];
-  for (const profile of state.profiles) {
-    if (!profile.enabled) continue;
+  const active = state.profiles.filter((p) => p.enabled);
+
+  // Check every pattern concurrently. This was one sequential round-trip per
+  // filter, which scaled badly across many profiles and widened the window in
+  // which the worker could be torn down partway through a sync.
+  const checked = await Promise.all(
+    active.map(async (profile) => {
+      const candidates = profile.urlFilters
+        .filter((f) => f.enabled && (f.pattern || "").trim())
+        .map((f) => (f.pattern || "").trim());
+      const ok = await Promise.all(candidates.map(isRegexOk));
+      return { profile, candidates, ok };
+    }),
+  );
+
+  // Fold back in profile order so the reported errors stay deterministic.
+  for (const { profile, candidates, ok } of checked) {
     const valid = [];
-    for (const f of profile.urlFilters) {
-      if (!f.enabled) continue;
-      const p = (f.pattern || "").trim();
-      if (!p) continue;
-      if (await isRegexOk(p)) {
-        valid.push(p);
-      } else {
+    candidates.forEach((pattern, i) => {
+      if (ok[i]) valid.push(pattern);
+      else
         errors.push({
           profile: profile.name,
-          pattern: p,
+          pattern,
           message: "Invalid URL regex — skipped",
         });
-      }
-    }
+    });
     byProfile[profile.id] = valid;
   }
   return { byProfile, errors };
@@ -120,6 +130,59 @@ function syncRules() {
   return syncing;
 }
 
+// declarativeNetRequest caps dynamic rules. Going over rejects the entire
+// batch, which previously meant every profile lost its headers at once, so trim
+// deterministically in profile order and say exactly what was dropped.
+function ruleCap() {
+  const dnr = chrome.declarativeNetRequest;
+  return (
+    dnr.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES ||
+    dnr.MAX_NUMBER_OF_DYNAMIC_RULES ||
+    5000
+  );
+}
+
+// Apply rules, degrading gracefully instead of failing closed. A rejected batch
+// used to clear every rule — one bad entry anywhere cost every profile its
+// headers. Retry profile by profile so a rule Chrome dislikes only costs the
+// profile that owns it.
+async function applyRuleGroups(groups, removeRuleIds) {
+  const errors = [];
+  const addRules = groups.flatMap((g) => g.rules);
+
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds,
+      addRules,
+    });
+    return errors;
+  } catch (e) {
+    console.error("Batch rule update rejected; isolating per profile:", e);
+  }
+
+  // Clear once, then contribute whatever each profile can.
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+  } catch (_) {
+    /* ignore */
+  }
+
+  for (const g of groups) {
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        addRules: g.rules,
+      });
+    } catch (e) {
+      errors.push({
+        profile: g.profileName,
+        pattern: "",
+        message: `Rules rejected, headers not applied — ${String(e.message || e)}`,
+      });
+    }
+  }
+  return errors;
+}
+
 async function doSyncRules() {
   const state = await loadState();
 
@@ -132,33 +195,35 @@ async function doSyncRules() {
   setIconForTheme(state);
 
   const { byProfile, errors } = await validatePatterns(state);
-  const rules = compileRules(state, byProfile);
+  const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
+    errors.push({
+      profile: profile.name,
+      pattern: "",
+      message: `${reason}: "${name}"`,
+    });
+  });
+
+  const cap = ruleCap();
+  const groups = [];
+  let count = 0;
+  for (const g of allGroups) {
+    if (count + g.rules.length > cap) {
+      errors.push({
+        profile: g.profileName,
+        pattern: "",
+        message: `Dynamic-rule limit (${cap}) reached — headers not applied`,
+      });
+      continue;
+    }
+    count += g.rules.length;
+    groups.push(g);
+  }
 
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
+  const applyErrors = await applyRuleGroups(groups, removeRuleIds);
 
-  try {
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds,
-      addRules: rules,
-    });
-    await chrome.storage.local.set({ [ERROR_KEY]: errors });
-  } catch (e) {
-    // If the batch is rejected, clear rules so we fail safe (no headers) and
-    // surface the reason to the popup.
-    console.error("Failed to apply rules:", e);
-    try {
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
-    } catch (_) {
-      /* ignore */
-    }
-    await chrome.storage.local.set({
-      [ERROR_KEY]: [
-        ...errors,
-        { profile: "—", pattern: "", message: String(e.message || e) },
-      ],
-    });
-  }
+  await chrome.storage.local.set({ [ERROR_KEY]: [...errors, ...applyErrors] });
 }
 
 // --- Lifecycle wiring -------------------------------------------------------

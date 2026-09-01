@@ -12,8 +12,10 @@ import {
 } from "../state.js";
 import {
   compileRules,
+  compileRuleGroups,
   headerActions,
   countActiveHeaders,
+  isValidHeaderName,
 } from "../rules.js";
 
 let passed = 0;
@@ -323,6 +325,86 @@ test("migrate tolerates junk without throwing", () => {
   assert.doesNotThrow(() => migrate(undefined));
   assert.doesNotThrow(() => migrate({}));
   assert.doesNotThrow(() => migrate("nonsense"));
+});
+
+test("isValidHeaderName accepts RFC 7230 tokens and rejects the rest", () => {
+  for (const ok of ["X-Auth", "authorization", "x_trace-id", "a1", "X-A.B", "If-None-Match"]) {
+    assert.ok(isValidHeaderName(ok), `${ok} should be valid`);
+  }
+  for (const bad of ["X Auth", "X:Auth", "", "x\ty", "hdr\n", "a=b", "(x)", "a,b", "a/b"]) {
+    assert.ok(!isValidHeaderName(bad), `${JSON.stringify(bad)} should be invalid`);
+  }
+});
+
+test("a malformed header name is skipped and reported, not fatal", () => {
+  const skipped = [];
+  const actions = headerActions(
+    [
+      makeHeader("X-Good", "1"),
+      makeHeader("X Bad Name", "2"),
+      makeHeader("X-Also-Good", "3"),
+    ],
+    (name, reason) => skipped.push({ name, reason }),
+  );
+  // The good headers still compile — one typo must not cost the others.
+  assert.deepEqual(
+    actions.map((a) => a.header),
+    ["X-Good", "X-Also-Good"],
+  );
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].name, "X Bad Name");
+  assert.match(skipped[0].reason, /Invalid header name/);
+});
+
+test("compileRules reports malformed names per profile", () => {
+  const p = makeProfile("Broken", 0);
+  p.requestHeaders = [makeHeader("X Bad", "v"), makeHeader("X-Fine", "v")];
+  const state = normalizeState({ profiles: [p] });
+  const seen = [];
+  const rules = compileRules(state, {}, (profile, name, reason) =>
+    seen.push([profile.name, name, reason]),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], "Broken");
+  assert.equal(seen[0][1], "X Bad");
+  assert.equal(rules.length, 1);
+  assert.deepEqual(
+    rules[0].action.requestHeaders.map((h) => h.header),
+    ["X-Fine"],
+  );
+});
+
+test("compileRuleGroups groups by profile with globally unique ids", () => {
+  const a = makeProfile("A", 0);
+  a.requestHeaders = [makeHeader("X-A", "1")];
+  a.urlFilters = [makeUrlFilter("a\\.com"), makeUrlFilter("b\\.com")];
+  const b = makeProfile("B", 1);
+  b.requestHeaders = [makeHeader("X-B", "2")];
+  const state = normalizeState({ profiles: [a, b] });
+  const valid = { [state.profiles[0].id]: ["a\\.com", "b\\.com"] };
+
+  const groups = compileRuleGroups(state, valid);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].profileName, "A");
+  assert.equal(groups[0].rules.length, 2, "one rule per URL pattern");
+  assert.equal(groups[1].profileName, "B");
+  assert.equal(groups[1].rules.length, 1);
+
+  const ids = groups.flatMap((g) => g.rules.map((r) => r.id));
+  assert.equal(new Set(ids).size, ids.length, "ids must be unique across groups");
+
+  // The flat helper must stay byte-identical to the flattened groups, since
+  // updateDynamicRules consumes it directly.
+  assert.deepEqual(compileRules(state, valid), groups.flatMap((g) => g.rules));
+});
+
+test("countActiveHeaders ignores headers that cannot compile", () => {
+  const p = makeProfile("P", 0);
+  p.requestHeaders = [makeHeader("X-Ok", "1"), makeHeader("X Bad", "2")];
+  p.responseHeaders = [makeHeader("X-Ok-2", "3")];
+  const state = normalizeState({ profiles: [p] });
+  // Badge must match what is actually applied, not what was typed.
+  assert.equal(countActiveHeaders(state), 2);
 });
 
 console.log(`\n${passed} tests passed`);

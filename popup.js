@@ -436,11 +436,15 @@ function renderErrors(errors) {
     dom.errorBanner.textContent = "";
     return;
   }
-  const lines = errors.map((e) =>
-    e.pattern
-      ? `${e.profile}: ${e.message}  ·  /${e.pattern}/`
-      : String(e.message),
-  );
+  // Keep the profile name even when there is no regex to show — without it, a
+  // per-profile failure rendered as a bare message with no clue which profile
+  // to go and fix.
+  const lines = errors.map((e) => {
+    const where = e.profile && e.profile !== "—" ? `${e.profile}: ` : "";
+    return e.pattern
+      ? `${where}${e.message}  ·  /${e.pattern}/`
+      : `${where}${e.message}`;
+  });
   dom.errorBanner.hidden = false;
   dom.errorBanner.textContent = "⚠  " + lines.join("\n");
 }
