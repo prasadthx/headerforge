@@ -117,6 +117,21 @@ export function makeProfile(name, colorIndex = 0) {
   };
 }
 
+// Profile names are how a profile is identified in error messages, in the live
+// order list and in exports, so two profiles sharing one is genuinely ambiguous.
+// Suffix until unique, and count up an existing suffix rather than stacking a
+// new one ("Auth 2", not "Auth 2 2").
+export function uniqueProfileName(desired, taken) {
+  const base = (typeof desired === "string" ? desired : "").trim() || "Profile";
+  const used = taken instanceof Set ? taken : new Set(taken || []);
+  if (!used.has(base)) return base;
+  const m = base.match(/^(.*\S)\s+(\d+)$/);
+  const stem = m ? m[1] : base;
+  let n = m ? Number(m[2]) + 1 : 2;
+  while (used.has(`${stem} ${n}`)) n++;
+  return `${stem} ${n}`;
+}
+
 export function createDefaultState() {
   const profile = makeProfile("Profile 1", 0);
   return {
