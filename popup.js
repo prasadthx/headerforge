@@ -11,6 +11,7 @@ import {
   normalizeState,
   migrate,
   createDefaultState,
+  uniqueProfileName,
   ICON_PATHS,
   RESOLVED_THEME_KEY,
 } from "./state.js";
@@ -123,6 +124,13 @@ let saveTimer;
 let pendingHeaderKind = "request"; // which list a header-import targets
 let menuProfileId = null; // profile the open action menu belongs to
 let searchQuery = ""; // fuzzy header search term
+
+// Names currently in use, optionally excluding one profile (for rename).
+function profileNames(exceptId) {
+  return new Set(
+    state.profiles.filter((p) => p.id !== exceptId).map((p) => p.name),
+  );
+}
 
 function currentProfile() {
   return (
@@ -860,6 +868,7 @@ function addProfile() {
   closeMenu();
   const n = state.profiles.length + 1;
   const p = makeProfile(`Profile ${n}`, n - 1);
+  p.name = uniqueProfileName(p.name, profileNames());
   state.profiles.push(p);
   state.selectedProfileId = p.id;
   save({ immediate: true });
@@ -871,6 +880,7 @@ function cloneProfile(src) {
   const copy = normalizeState({ profiles: [{ ...src, name: `${src.name} copy` }] })
     .profiles[0];
   copy.id = uid();
+  copy.name = uniqueProfileName(copy.name, profileNames());
   copy.requestHeaders.forEach((h) => (h.id = uid()));
   copy.responseHeaders.forEach((h) => (h.id = uid()));
   copy.urlFilters.forEach((f) => (f.id = uid()));
@@ -914,7 +924,9 @@ function startRename(profile, pill, label) {
     if (done) return;
     done = true;
     if (commit) {
-      profile.name = input.value.trim() || profile.name;
+      const wanted = input.value.trim() || profile.name;
+      profile.name = uniqueProfileName(wanted, profileNames(profile.id));
+      if (profile.name !== wanted) toast(`Renamed to "${profile.name}" — that name was taken`);
       save();
     }
     renderSidebar();
@@ -1006,10 +1018,12 @@ async function importProfilesFromFile(file) {
     toast("No profiles found in file");
     return;
   }
-  const cleaned = normalizeState({ profiles: adapted }).profiles.map((p) => ({
-    ...p,
-    id: uid(),
-  }));
+  const taken = profileNames();
+  const cleaned = normalizeState({ profiles: adapted }).profiles.map((p) => {
+    const name = uniqueProfileName(p.name, taken);
+    taken.add(name);
+    return { ...p, id: uid(), name };
+  });
   state.profiles.push(...cleaned);
   state.selectedProfileId = cleaned[0].id;
   save({ immediate: true });

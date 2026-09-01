@@ -824,7 +824,10 @@ body {
 }
 .sidebar__list {
   flex: 1;
-  min-height: 0;
+  /* Floor of roughly two rows. Without it the live-order block below squeezed
+     the list to nothing on a short popup — measured at 8px, i.e. zero usable
+     rows, at the 420x320 minimum. The block shrinks instead. */
+  min-height: 64px;
   overflow-y: auto;
   padding: 4px 6px;
   display: flex;
@@ -860,9 +863,18 @@ body {
 .precedence {
   border-top: 1px solid var(--border);
   padding: 8px 10px 10px;
-  flex-shrink: 0;
+  /* Shrinks so the profile list keeps its floor, and the entries scroll inside
+     rather than pushing the list out. Never below title + one entry, because
+     clipping down to a bare "LIVE ORDER" heading just reads as broken. Width is
+     bounded by the sidebar, so this can never encroach on the header editor. */
+  flex: 0 1 auto;
+  min-height: 46px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .precedence__title {
+  flex-shrink: 0;
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -877,8 +889,15 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.precedence__list::-webkit-scrollbar {
+  width: 6px;
 }
 .precedence__item {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 5px;

@@ -5,6 +5,7 @@ import {
   migrate,
   createDefaultState,
   uid,
+  uniqueProfileName,
   ICON_PATHS,
   RESOLVED_THEME_KEY,
 } from "./state.js";
@@ -150,10 +151,12 @@ async function importProfiles(file) {
     status.textContent = "No profiles found in that file.";
     return;
   }
-  const cleaned = normalizeState({ profiles: usable }).profiles.map((p) => ({
-    ...p,
-    id: uid(),
-  }));
+  const taken = new Set(state.profiles.map((p) => p.name));
+  const cleaned = normalizeState({ profiles: usable }).profiles.map((p) => {
+    const name = uniqueProfileName(p.name, taken);
+    taken.add(name);
+    return { ...p, id: uid(), name };
+  });
   await save((s) => ({ ...s, profiles: [...s.profiles, ...cleaned] }));
   status.textContent = `Imported ${cleaned.length} profile${cleaned.length === 1 ? "" : "s"}.`;
 }

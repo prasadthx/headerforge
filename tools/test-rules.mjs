@@ -11,6 +11,7 @@ import {
   SIZE_LIMITS,
   PROFILE_COLORS,
   DEFAULT_SETTINGS,
+  uniqueProfileName,
 } from "../state.js";
 import {
   compileRules,
@@ -618,6 +619,42 @@ test("an array of junk yields no importable profiles", () => {
     // Demonstrates why the guard is needed at all:
     assert.equal(normalizeState({ profiles: junk }).profiles.length, 1);
   }
+});
+
+test("uniqueProfileName resolves collisions without stacking suffixes", () => {
+  assert.equal(uniqueProfileName("Auth", []), "Auth");
+  assert.equal(uniqueProfileName("Auth", ["Auth"]), "Auth 2");
+  assert.equal(uniqueProfileName("Auth", ["Auth", "Auth 2"]), "Auth 3");
+  // An existing numeric suffix counts up rather than gaining a second one.
+  assert.equal(uniqueProfileName("Auth 2", ["Auth 2"]), "Auth 3");
+  assert.equal(uniqueProfileName("Auth 2", ["Auth 2", "Auth 3"]), "Auth 4");
+  // The case that actually bit: delete the middle profile, add a new one.
+  assert.equal(uniqueProfileName("Profile 3", ["Profile 1", "Profile 3"]), "Profile 4");
+  // Duplicating twice.
+  assert.equal(uniqueProfileName("Auth copy", ["Auth", "Auth copy"]), "Auth copy 2");
+  // Blank and non-string fall back rather than producing an unnamed profile.
+  assert.equal(uniqueProfileName("   ", []), "Profile");
+  assert.equal(uniqueProfileName(undefined, ["Profile"]), "Profile 2");
+  // Accepts a Set as well as an array.
+  assert.equal(uniqueProfileName("Auth", new Set(["Auth"])), "Auth 2");
+  // Trailing digits that are part of the name, not a suffix.
+  assert.equal(uniqueProfileName("v2", ["v2"]), "v2 2");
+});
+
+test("a run of additions never repeats a name", () => {
+  // Mirrors addProfile: mint "Profile N", uniquify, insert; then delete from the
+  // middle and add again, which is exactly what used to collide.
+  const names = [];
+  const add = () => {
+    const n = uniqueProfileName(`Profile ${names.length + 1}`, new Set(names));
+    names.push(n);
+    return n;
+  };
+  add(); add(); add();
+  assert.deepEqual(names, ["Profile 1", "Profile 2", "Profile 3"]);
+  names.splice(1, 1); // delete "Profile 2"
+  assert.equal(add(), "Profile 4");
+  assert.equal(new Set(names).size, names.length, "names must stay unique");
 });
 
 console.log(`\n${passed} tests passed`);
