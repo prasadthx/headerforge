@@ -39,7 +39,14 @@ export function headerActions(headers, onSkip) {
 // predicate as headerActions so the sidebar, the badge and the compiled rules
 // can never disagree about which profiles are live.
 export function hasApplicableHeaders(profile) {
-  for (const h of [...profile.requestHeaders, ...profile.responseHeaders]) {
+  return (
+    anyApplicable(profile.requestHeaders) ||
+    anyApplicable(profile.responseHeaders)
+  );
+}
+
+function anyApplicable(headers) {
+  for (const h of headers) {
     if (h.enabled && isValidHeaderName((h.name || "").trim())) return true;
   }
   return false;
@@ -125,14 +132,21 @@ export function compileRules(state, validPatternsByProfileId = {}, onSkip) {
   );
 }
 
+function countApplicable(headers) {
+  let n = 0;
+  for (const h of headers) {
+    if (h.enabled && isValidHeaderName((h.name || "").trim())) n++;
+  }
+  return n;
+}
+
 // How many headers are actively applied (for the toolbar badge).
 export function countActiveHeaders(state) {
   if (!state || state.paused) return 0;
   let n = 0;
   for (const p of state.profiles) {
     if (!p.enabled) continue;
-    for (const h of [...p.requestHeaders, ...p.responseHeaders])
-      if (h.enabled && isValidHeaderName((h.name || "").trim())) n++;
+    n += countApplicable(p.requestHeaders) + countApplicable(p.responseHeaders);
   }
   return n;
 }

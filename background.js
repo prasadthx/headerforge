@@ -103,6 +103,11 @@ async function setIconForTheme(state) {
   await chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
 }
 
+// Last error set written, so an unchanged one is not rewritten on every sync.
+// Undefined after a worker restart, so the first sync always writes and stale
+// errors can never survive.
+let lastErrorsJson;
+
 let syncing = Promise.resolve();
 let queued = false;
 
@@ -219,7 +224,12 @@ async function doSyncRules() {
   const removeRuleIds = existing.map((r) => r.id);
   const applyErrors = await applyRuleGroups(groups, removeRuleIds);
 
-  await chrome.storage.local.set({ [ERROR_KEY]: [...errors, ...applyErrors] });
+  const allErrors = [...errors, ...applyErrors];
+  const json = JSON.stringify(allErrors);
+  if (json !== lastErrorsJson) {
+    lastErrorsJson = json;
+    await chrome.storage.local.set({ [ERROR_KEY]: allErrors });
+  }
 }
 
 // --- Lifecycle wiring -------------------------------------------------------
