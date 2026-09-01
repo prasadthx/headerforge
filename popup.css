@@ -853,6 +853,73 @@ body {
   width: 12px;
   height: 12px;
 }
+/* ---------- Live precedence (sidebar footer) ----------
+   One summary block rather than a marker on every profile row: at 132px the
+   per-row treatment was pure clutter. Reading top-down gives the order in
+   which profiles win a header conflict. */
+.precedence {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px 10px;
+  flex-shrink: 0;
+}
+.precedence__title {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 5px;
+}
+.precedence__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.precedence__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.precedence__rank {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8.5px;
+  font-weight: 700;
+  background: var(--bg-sunken);
+  color: var(--text-faint);
+}
+/* The top entry wins every conflict — give it the accent so it reads first. */
+.precedence__item--top .precedence__rank {
+  background: var(--accent);
+  color: #fff;
+}
+.precedence__item--top .precedence__name {
+  color: var(--text);
+  font-weight: 600;
+}
+.precedence__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.precedence__more,
+.precedence__empty {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
 .main {
   flex: 1;
   min-width: 0;

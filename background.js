@@ -8,11 +8,13 @@ import {
   STORAGE_KEY,
   ERROR_KEY,
   UPDATE_KEY,
+  RESOLVED_THEME_KEY,
+  ICON_PATHS,
   normalizeState,
   createDefaultState,
   migrate,
 } from "./state.js";
-import { compileRules, countActiveHeaders } from "./rules.js";
+import { compileRuleGroups, countActiveHeaders } from "./rules.js";
 
 async function loadState() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
@@ -36,23 +38,33 @@ async function isRegexOk(pattern) {
 async function validatePatterns(state) {
   const byProfile = {};
   const errors = [];
-  for (const profile of state.profiles) {
-    if (!profile.enabled) continue;
+  const active = state.profiles.filter((p) => p.enabled);
+
+  // Check every pattern concurrently. This was one sequential round-trip per
+  // filter, which scaled badly across many profiles and widened the window in
+  // which the worker could be torn down partway through a sync.
+  const checked = await Promise.all(
+    active.map(async (profile) => {
+      const candidates = profile.urlFilters
+        .filter((f) => f.enabled && (f.pattern || "").trim())
+        .map((f) => (f.pattern || "").trim());
+      const ok = await Promise.all(candidates.map(isRegexOk));
+      return { profile, candidates, ok };
+    }),
+  );
+
+  // Fold back in profile order so the reported errors stay deterministic.
+  for (const { profile, candidates, ok } of checked) {
     const valid = [];
-    for (const f of profile.urlFilters) {
-      if (!f.enabled) continue;
-      const p = (f.pattern || "").trim();
-      if (!p) continue;
-      if (await isRegexOk(p)) {
-        valid.push(p);
-      } else {
+    candidates.forEach((pattern, i) => {
+      if (ok[i]) valid.push(pattern);
+      else
         errors.push({
           profile: profile.name,
-          pattern: p,
+          pattern,
           message: "Invalid URL regex — skipped",
         });
-      }
-    }
+    });
     byProfile[profile.id] = valid;
   }
   return { byProfile, errors };
@@ -76,68 +88,148 @@ async function updateBadge(state) {
   });
 }
 
-// Theme-aware toolbar icon. Chrome has no native light/dark icon support, so we
-// swap paths manually. The worker cannot resolve the "system" theme (no
-// matchMedia in service workers), so the popup picks the variant for that case.
-const ICON_PATHS = {
-  light: {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-  },
-  dark: {
-    "16": "icons/icon16-dark.png",
-    "48": "icons/icon48-dark.png",
-    "128": "icons/icon128-dark.png",
-  },
-};
-
-function setIconForTheme(state) {
-  if (state.theme === "system") return;
-  chrome.action.setIcon({ path: ICON_PATHS[state.theme] }).catch(() => {});
+// Theme-aware toolbar icon. Service workers have no matchMedia, so "system"
+// cannot be resolved here; the UI records what it resolved to under
+// RESOLVED_THEME_KEY and we reuse that. Previously the worker simply gave up on
+// "system" (the default), leaving the manifest's light icon in place — and
+// because setIcon does not survive a browser restart, dark-mode users got the
+// light icon on every restart until they happened to open the popup.
+async function setIconForTheme(state) {
+  let theme = state.theme;
+  if (theme === "system") {
+    const stored = await chrome.storage.local.get(RESOLVED_THEME_KEY);
+    theme = stored[RESOLVED_THEME_KEY] === "dark" ? "dark" : "light";
+  }
+  await chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
 }
 
+// Last error set written, so an unchanged one is not rewritten on every sync.
+// Undefined after a worker restart, so the first sync always writes and stale
+// errors can never survive.
+let lastErrorsJson;
+
 let syncing = Promise.resolve();
+let queued = false;
 
 // Serialize rule updates so rapid edits from the popup don't race each other.
+// Coalesce them too: every state change now arrives twice (once via
+// storage.onChanged, once via the popup's explicit "resync" nudge), and
+// doSyncRules always re-reads the latest state, so a sync that has not started
+// yet will already pick up whatever landed after it was queued.
 function syncRules() {
-  syncing = syncing.then(doSyncRules).catch((e) => console.error(e));
+  if (queued) return syncing;
+  queued = true;
+  syncing = syncing
+    .then(() => {
+      queued = false;
+      return doSyncRules();
+    })
+    .catch((e) => {
+      queued = false;
+      console.error(e);
+    });
   return syncing;
 }
 
-async function doSyncRules() {
-  const state = await loadState();
-  const { byProfile, errors } = await validatePatterns(state);
-  const rules = compileRules(state, byProfile);
+// declarativeNetRequest caps dynamic rules. Going over rejects the entire
+// batch, which previously meant every profile lost its headers at once, so trim
+// deterministically in profile order and say exactly what was dropped.
+function ruleCap() {
+  const dnr = chrome.declarativeNetRequest;
+  return (
+    dnr.MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES ||
+    dnr.MAX_NUMBER_OF_DYNAMIC_RULES ||
+    5000
+  );
+}
 
-  const existing = await chrome.declarativeNetRequest.getDynamicRules();
-  const removeRuleIds = existing.map((r) => r.id);
+// Apply rules, degrading gracefully instead of failing closed. A rejected batch
+// used to clear every rule — one bad entry anywhere cost every profile its
+// headers. Retry profile by profile so a rule Chrome dislikes only costs the
+// profile that owns it.
+async function applyRuleGroups(groups, removeRuleIds) {
+  const errors = [];
+  const addRules = groups.flatMap((g) => g.rules);
 
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({
       removeRuleIds,
-      addRules: rules,
+      addRules,
     });
-    await chrome.storage.local.set({ [ERROR_KEY]: errors });
+    return errors;
   } catch (e) {
-    // If the batch is rejected, clear rules so we fail safe (no headers) and
-    // surface the reason to the popup.
-    console.error("Failed to apply rules:", e);
-    try {
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
-    } catch (_) {
-      /* ignore */
-    }
-    await chrome.storage.local.set({
-      [ERROR_KEY]: [
-        ...errors,
-        { profile: "—", pattern: "", message: String(e.message || e) },
-      ],
-    });
+    console.error("Batch rule update rejected; isolating per profile:", e);
   }
 
+  // Clear once, then contribute whatever each profile can.
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+  } catch (_) {
+    /* ignore */
+  }
+
+  for (const g of groups) {
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        addRules: g.rules,
+      });
+    } catch (e) {
+      errors.push({
+        profile: g.profileName,
+        pattern: "",
+        message: `Rules rejected, headers not applied — ${String(e.message || e)}`,
+      });
+    }
+  }
+  return errors;
+}
+
+async function doSyncRules() {
+  const state = await loadState();
+
+  // Paint the badge and icon FIRST. Both derive purely from `state`, so they
+  // have no reason to wait on the declarativeNetRequest round-trips below.
+  // Doing them last meant that if the worker was torn down mid-sync, the rules
+  // had already been applied while the badge still showed the previous count —
+  // and nothing repainted it until the extension was restarted.
   await updateBadge(state);
-  setIconForTheme(state);
+  await setIconForTheme(state);
+
+  const { byProfile, errors } = await validatePatterns(state);
+  const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
+    errors.push({
+      profile: profile.name,
+      pattern: "",
+      message: `${reason}: "${name}"`,
+    });
+  });
+
+  const cap = ruleCap();
+  const groups = [];
+  let count = 0;
+  for (const g of allGroups) {
+    if (count + g.rules.length > cap) {
+      errors.push({
+        profile: g.profileName,
+        pattern: "",
+        message: `Dynamic-rule limit (${cap}) reached — headers not applied`,
+      });
+      continue;
+    }
+    count += g.rules.length;
+    groups.push(g);
+  }
+
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  const removeRuleIds = existing.map((r) => r.id);
+  const applyErrors = await applyRuleGroups(groups, removeRuleIds);
+
+  const allErrors = [...errors, ...applyErrors];
+  const json = JSON.stringify(allErrors);
+  if (json !== lastErrorsJson) {
+    lastErrorsJson = json;
+    await chrome.storage.local.set({ [ERROR_KEY]: allErrors });
+  }
 }
 
 // --- Lifecycle wiring -------------------------------------------------------
@@ -157,9 +249,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   await syncRules();
 });
 
-chrome.runtime.onStartup.addListener(() => {
-  syncRules();
-});
+chrome.runtime.onStartup.addListener(() => syncRules());
 
 // When Chrome has a newer version staged, record it so the UI can offer a
 // one-click reload instead of waiting for the next browser restart.
@@ -168,9 +258,12 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
 });
 
 // The popup persists edits to storage; rebuild rules whenever they change.
-chrome.storage.onChanged.addListener((changes, area) => {
+// Returning the promise matters: a fire-and-forget call left Chrome unaware that
+// async work was still pending, so the worker's idle timer could expire partway
+// through the sync and strand the badge on a stale count.
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === "local" && changes[STORAGE_KEY]) {
-    syncRules();
+    await syncRules();
   }
 });
 

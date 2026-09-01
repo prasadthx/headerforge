@@ -11,7 +11,10 @@ import {
   normalizeState,
   migrate,
   createDefaultState,
+  ICON_PATHS,
+  RESOLVED_THEME_KEY,
 } from "./state.js";
+import { precedenceOrder } from "./rules.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
 
@@ -106,6 +109,8 @@ const dom = {
   settingsRepoLink: $("settingsRepoLink"),
   settingsIssuesLink: $("settingsIssuesLink"),
   showOpChk: $("showOpChk"),
+  precedence: $("precedence"),
+  precedenceList: $("precedenceList"),
   resizeGrip: $("resizeGrip"),
 };
 
@@ -126,16 +131,41 @@ function currentProfile() {
   );
 }
 
+// Persist, then explicitly nudge the service worker.
+//
+// storage.onChanged is the background's only other trigger, and it is NOT a
+// reliable wake-up for a *dormant* MV3 worker: after ~30s idle Chrome tears the
+// worker down, and a storage write from the popup can be dropped without ever
+// dispatching the event. When that happened, doSyncRules never ran at all — so
+// pausing left the old rules applied and the badge showing the old count, and
+// the only way out was restarting the extension (which re-runs syncRules at
+// module scope). runtime.sendMessage does reliably wake the worker, so we send
+// it after the write has landed.
+async function commit() {
+  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  try {
+    await chrome.runtime.sendMessage({ type: "resync" });
+  } catch {
+    // No receiver (worker still starting, or the popup closed first). The
+    // storage write is already durable and the worker syncs on spin-up.
+  }
+}
+
 function save({ immediate = false } = {}) {
+  // Every mutation funnels through here, so this is the one place that reliably
+  // catches anything affecting which profiles are live: selection, profile
+  // enable/disable, a header being toggled off, a name being typed into or out
+  // of validity. Cheap — it renders a handful of nodes off an O(headers) scan.
+  renderPrecedence();
   clearTimeout(saveTimer);
-  const commit = () => chrome.storage.local.set({ [STORAGE_KEY]: state });
-  if (immediate) commit();
-  else saveTimer = setTimeout(commit, 200);
+  if (immediate) return commit();
+  saveTimer = setTimeout(commit, 200);
+  return Promise.resolve();
 }
 
 async function flush() {
   clearTimeout(saveTimer);
-  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  await commit();
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +437,57 @@ function renderSidebar() {
 function renderPausedUI() {
   dom.pauseBtn.setAttribute("aria-pressed", String(state.paused));
   dom.pausedBanner.hidden = !state.paused;
+  dom.pauseBtn.title = state.paused ? "Resume all headers" : "Pause all headers";
+  renderPrecedence();
+}
+
+// Show which profiles are actually applying headers and in what order they win
+// a conflict. Every enabled profile still applies; this only makes the
+// precedence — and the fact that the open profile outranks the rest — visible.
+const PRECEDENCE_SHOWN = 3;
+
+function renderPrecedence() {
+  const order = precedenceOrder(state);
+  dom.precedenceList.textContent = "";
+
+  if (order.length === 0) {
+    dom.precedence.title = state.paused
+      ? "Paused — no headers are being applied"
+      : "No profile is applying headers right now";
+    dom.precedenceList.append(
+      el("li", {
+        class: "precedence__empty",
+        textContent: state.paused ? "Paused" : "Nothing applied",
+      }),
+    );
+    return;
+  }
+
+  dom.precedence.title =
+    order.length === 1
+      ? `Only "${order[0].name}" is applying headers`
+      : `Headers from higher entries win when profiles set the same header:\n${order
+          .map((p, i) => `${i + 1}. ${p.name}`)
+          .join("\n")}`;
+
+  order.slice(0, PRECEDENCE_SHOWN).forEach((p, i) => {
+    const rank = el("span", { class: "precedence__rank", textContent: i + 1 });
+    if (i > 0) rank.style.background = `color-mix(in srgb, ${p.color} 30%, transparent)`;
+    dom.precedenceList.append(
+      el(
+        "li",
+        { class: "precedence__item" + (i === 0 ? " precedence__item--top" : "") },
+        [rank, el("span", { class: "precedence__name", textContent: p.name })],
+      ),
+    );
+  });
+
+  const hidden = order.length - PRECEDENCE_SHOWN;
+  if (hidden > 0) {
+    dom.precedenceList.append(
+      el("li", { class: "precedence__more", textContent: `+${hidden} more` }),
+    );
+  }
 }
 
 function renderErrors(errors) {
@@ -415,17 +496,22 @@ function renderErrors(errors) {
     dom.errorBanner.textContent = "";
     return;
   }
-  const lines = errors.map((e) =>
-    e.pattern
-      ? `${e.profile}: ${e.message}  ·  /${e.pattern}/`
-      : String(e.message),
-  );
+  // Keep the profile name even when there is no regex to show — without it, a
+  // per-profile failure rendered as a bare message with no clue which profile
+  // to go and fix.
+  const lines = errors.map((e) => {
+    const where = e.profile && e.profile !== "—" ? `${e.profile}: ` : "";
+    return e.pattern
+      ? `${where}${e.message}  ·  /${e.pattern}/`
+      : `${where}${e.message}`;
+  });
   dom.errorBanner.hidden = false;
   dom.errorBanner.textContent = "⚠  " + lines.join("\n");
 }
 
 function renderAll() {
   renderSidebar();
+  renderPrecedence();
   renderPanels();
   renderPausedUI();
 }
@@ -505,19 +591,6 @@ const darkMedia = matchMedia("(prefers-color-scheme: dark)");
 // Toolbar icon variants. Chrome has no theme-aware icon support, so we swap
 // paths manually: the light icon is the dark purple square (for light toolbars),
 // the dark one is the light lavender variant (for dark toolbars).
-const ICON_PATHS = {
-  light: {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-  },
-  dark: {
-    "16": "icons/icon16-dark.png",
-    "48": "icons/icon48-dark.png",
-    "128": "icons/icon128-dark.png",
-  },
-};
-
 function effectiveTheme() {
   if (state.theme === "system") return darkMedia.matches ? "dark" : "light";
   return state.theme;
@@ -531,7 +604,11 @@ function applyTheme() {
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  chrome.action?.setIcon?.({ path: ICON_PATHS[effectiveTheme()] }).catch?.(() => {});
+  const resolved = effectiveTheme();
+  chrome.action?.setIcon?.({ path: ICON_PATHS[resolved] }).catch?.(() => {});
+  // Remember the resolution so the worker can pick the right icon on a cold
+  // start, when it has no way to evaluate "system" itself.
+  chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: resolved });
 }
 
 function cycleTheme() {
@@ -1018,15 +1095,18 @@ function toast(msg) {
 // Wiring.
 // ---------------------------------------------------------------------------
 function wire() {
-  dom.pauseBtn.addEventListener("click", () => {
+  // Render first, then await the write: pausing is the one action where the user
+  // routinely closes the popup immediately afterwards, and the worker nudge in
+  // commit() has to be dispatched before the document is torn down.
+  dom.pauseBtn.addEventListener("click", async () => {
     state.paused = !state.paused;
-    save({ immediate: true });
     renderPausedUI();
+    await save({ immediate: true });
   });
-  dom.resumeBtn.addEventListener("click", () => {
+  dom.resumeBtn.addEventListener("click", async () => {
     state.paused = false;
-    save({ immediate: true });
     renderPausedUI();
+    await save({ immediate: true });
   });
   dom.themeBtn.addEventListener("click", cycleTheme);
   dom.optionsBtn.addEventListener("click", openSettings);
@@ -1121,8 +1201,23 @@ function wire() {
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[ERROR_KEY]) {
+    if (area !== "local") return;
+    if (changes[ERROR_KEY]) {
       renderErrors(changes[ERROR_KEY].newValue);
+    }
+    // The About & settings tab may have changed the shared state. Adopt it
+    // rather than writing our own snapshot back over it on the next save.
+    // Skipped while an edit is still queued, so an in-progress keystroke is
+    // never yanked out from under the user.
+    if (changes[STORAGE_KEY] && !saveTimer) {
+      const incoming = normalizeState(migrate(changes[STORAGE_KEY].newValue));
+      // Our own writes echo back here; ignore those.
+      if (JSON.stringify(incoming) === JSON.stringify(state)) return;
+      state = incoming;
+      applyTheme();
+      applySize();
+      applySettingsUI();
+      renderAll();
     }
   });
 
