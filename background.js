@@ -16,8 +16,13 @@ import {
 } from "./state.js";
 import { compileRuleGroups, countActiveHeaders } from "./rules.js";
 
+// What the UI last resolved "system" to. Read alongside the state so the icon
+// costs no extra round-trip on a path that runs on every keystroke.
+let resolvedThemeHint = "light";
+
 async function loadState() {
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  const stored = await chrome.storage.local.get([STORAGE_KEY, RESOLVED_THEME_KEY]);
+  resolvedThemeHint = stored[RESOLVED_THEME_KEY] === "dark" ? "dark" : "light";
   return normalizeState(migrate(stored[STORAGE_KEY]));
 }
 
@@ -94,13 +99,9 @@ async function updateBadge(state) {
 // "system" (the default), leaving the manifest's light icon in place — and
 // because setIcon does not survive a browser restart, dark-mode users got the
 // light icon on every restart until they happened to open the popup.
-async function setIconForTheme(state) {
-  let theme = state.theme;
-  if (theme === "system") {
-    const stored = await chrome.storage.local.get(RESOLVED_THEME_KEY);
-    theme = stored[RESOLVED_THEME_KEY] === "dark" ? "dark" : "light";
-  }
-  await chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
+function setIconForTheme(state) {
+  const theme = state.theme === "system" ? resolvedThemeHint : state.theme;
+  return chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
 }
 
 // Last error set written, so an unchanged one is not rewritten on every sync.
@@ -149,6 +150,7 @@ function ruleCap() {
 // profile that owns it.
 async function applyRuleGroups(groups, removeRuleIds) {
   const errors = [];
+  const failedProfileIds = new Set();
   const addRules = groups.flatMap((g) => g.rules);
 
   try {
@@ -156,16 +158,25 @@ async function applyRuleGroups(groups, removeRuleIds) {
       removeRuleIds,
       addRules,
     });
-    return errors;
+    return { errors, failedProfileIds };
   } catch (e) {
     console.error("Batch rule update rejected; isolating per profile:", e);
   }
 
-  // Clear once, then contribute whatever each profile can.
+  // Clear once, then contribute whatever each profile can. This has to succeed:
+  // the per-profile adds below reuse rule ids 1..n, so leaving the old rules in
+  // place would make every single one collide and report a per-profile failure
+  // that has nothing to do with the profile. Report the real cause instead.
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
-  } catch (_) {
-    /* ignore */
+  } catch (e) {
+    for (const g of groups) failedProfileIds.add(g.profileId);
+    errors.push({
+      profile: "",
+      pattern: "",
+      message: `Could not clear existing rules, headers not applied — ${String(e.message || e)}`,
+    });
+    return { errors, failedProfileIds };
   }
 
   for (const g of groups) {
@@ -174,6 +185,7 @@ async function applyRuleGroups(groups, removeRuleIds) {
         addRules: g.rules,
       });
     } catch (e) {
+      failedProfileIds.add(g.profileId);
       errors.push({
         profile: g.profileName,
         pattern: "",
@@ -181,7 +193,7 @@ async function applyRuleGroups(groups, removeRuleIds) {
       });
     }
   }
-  return errors;
+  return { errors, failedProfileIds };
 }
 
 async function doSyncRules() {
@@ -206,9 +218,18 @@ async function doSyncRules() {
 
   const cap = ruleCap();
   const groups = [];
+  const dropped = new Set();
   let count = 0;
-  for (const g of allGroups) {
+  // Admit in precedence order: all rules in a group share the profile's
+  // priority, so sorting by it means a cap sheds the least important profiles
+  // rather than whichever happened to sit last in the sidebar — which could
+  // otherwise drop the selected profile, the one we just promoted to the top.
+  const byPrecedence = [...allGroups].sort(
+    (a, b) => b.rules[0].priority - a.rules[0].priority,
+  );
+  for (const g of byPrecedence) {
     if (count + g.rules.length > cap) {
+      dropped.add(g.profileId);
       errors.push({
         profile: g.profileName,
         pattern: "",
@@ -222,7 +243,21 @@ async function doSyncRules() {
 
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   const removeRuleIds = existing.map((r) => r.id);
-  const applyErrors = await applyRuleGroups(groups, removeRuleIds);
+  const { errors: applyErrors, failedProfileIds } = await applyRuleGroups(
+    groups,
+    removeRuleIds,
+  );
+
+  // The optimistic badge above counted every locally-valid header. If a profile
+  // was dropped at the cap or rejected by the engine, its headers are not
+  // applied, so repaint from what actually landed.
+  const notApplied = new Set([...dropped, ...failedProfileIds]);
+  if (notApplied.size > 0) {
+    await updateBadge({
+      ...state,
+      profiles: state.profiles.filter((p) => !notApplied.has(p.id)),
+    });
+  }
 
   const allErrors = [...errors, ...applyErrors];
   const json = JSON.stringify(allErrors);

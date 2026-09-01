@@ -9,6 +9,7 @@ import {
   migrate,
   SCHEMA_VERSION,
   SIZE_LIMITS,
+  PROFILE_COLORS,
 } from "../state.js";
 import {
   compileRules,
@@ -498,6 +499,43 @@ test("a profile whose only header is malformed is still reported", () => {
   const rules = compileRules(state, {}, (p, name) => seen.push([p.name, name]));
   assert.equal(rules.length, 0);
   assert.deepEqual(seen, [["OnlyBad", "X Bad"]]);
+});
+
+test("profile colours are restricted to hex literals", () => {
+  // They are interpolated into inline styles, so a url() would make the popup
+  // fetch a remote resource on behalf of an imported profile.
+  const hostile = normalizeState({
+    profiles: [
+      { name: "Evil", color: "url(https://attacker.example/pixel.png)", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "Sneaky", color: "red; background-image: url(https://x/y)", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "Named", color: "red", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "Fine", color: "#ABCDEF", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+      { name: "Short", color: "  #fff  ", requestHeaders: [], responseHeaders: [], urlFilters: [] },
+    ],
+  });
+  for (const p of hostile.profiles) {
+    assert.match(p.color, /^#[0-9a-fA-F]{3,8}$/, `${p.name} kept a non-hex colour`);
+  }
+  assert.equal(hostile.profiles[3].color, "#ABCDEF", "valid hex must survive");
+  assert.equal(hostile.profiles[4].color, "#fff", "valid hex must be trimmed, not replaced");
+  assert.ok(PROFILE_COLORS.includes(hostile.profiles[0].color), "hostile colour falls back to the palette");
+});
+
+test("group priority is uniform per profile, so a cap can sort by it", () => {
+  // background.js admits groups under the rule cap by rules[0].priority; that is
+  // only valid if every rule in a group carries the same priority.
+  const a = makeProfile("Multi", 0);
+  a.requestHeaders = [makeHeader("X-A", "1")];
+  a.urlFilters = [makeUrlFilter("x\\.com"), makeUrlFilter("y\\.com"), makeUrlFilter("z\\.com")];
+  const b = makeProfile("Single", 1);
+  b.requestHeaders = [makeHeader("X-B", "2")];
+  const state = normalizeState({ profiles: [a, b] });
+  const valid = { [state.profiles[0].id]: ["x\\.com", "y\\.com", "z\\.com"] };
+  const groups = compileRuleGroups(state, valid);
+  for (const g of groups) {
+    const prios = new Set(g.rules.map((r) => r.priority));
+    assert.equal(prios.size, 1, `${g.profileName} spread across ${prios.size} priorities`);
+  }
 });
 
 console.log(`\n${passed} tests passed`);

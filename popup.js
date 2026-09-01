@@ -158,13 +158,22 @@ function save({ immediate = false } = {}) {
   // of validity. Cheap — it renders a handful of nodes off an O(headers) scan.
   renderPrecedence();
   clearTimeout(saveTimer);
+  // Must be nulled, not just cleared: clearTimeout leaves the variable holding
+  // an expired-but-truthy timer id, and the storage listener below treats a
+  // truthy saveTimer as "an edit is in flight". Leaving it set meant the popup
+  // stopped adopting external changes after the very first debounced save.
+  saveTimer = null;
   if (immediate) return commit();
-  saveTimer = setTimeout(commit, 200);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    commit();
+  }, 200);
   return Promise.resolve();
 }
 
 async function flush() {
   clearTimeout(saveTimer);
+  saveTimer = null;
   await commit();
 }
 
@@ -588,9 +597,6 @@ function clamp(v, min, max) {
 // ---------------------------------------------------------------------------
 const darkMedia = matchMedia("(prefers-color-scheme: dark)");
 
-// Toolbar icon variants. Chrome has no theme-aware icon support, so we swap
-// paths manually: the light icon is the dark purple square (for light toolbars),
-// the dark one is the light lavender variant (for dark toolbars).
 function effectiveTheme() {
   if (state.theme === "system") return darkMedia.matches ? "dark" : "light";
   return state.theme;

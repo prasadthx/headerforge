@@ -112,7 +112,12 @@ async function checkForUpdates() {
 // ---------------------------------------------------------------------------
 // Data management.
 // ---------------------------------------------------------------------------
-function exportProfiles() {
+// Re-read rather than exporting the snapshot: this was the last path on the
+// page that could serve stale data if the popup had changed profiles since the
+// tab loaded.
+async function exportProfiles() {
+  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  state = normalizeState(migrate(stored[STORAGE_KEY]));
   download(
     "headerforge-profiles.json",
     JSON.stringify(
@@ -121,7 +126,7 @@ function exportProfiles() {
       2,
     ),
   );
-  $("dataStatus").textContent = "Exported all profiles.";
+  $("dataStatus").textContent = `Exported ${state.profiles.length} profile${state.profiles.length === 1 ? "" : "s"}.`;
 }
 
 async function importProfiles(file) {

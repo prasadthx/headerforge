@@ -131,6 +131,17 @@ export function createDefaultState() {
   };
 }
 
+// Profile colours are interpolated straight into inline styles, so an imported
+// profile carrying something like "url(https://…)" would make the popup fetch a
+// remote resource. Only accept hex literals; anything else falls back to the
+// palette.
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+
+function safeColor(c, i) {
+  const v = typeof c === "string" ? c.trim() : "";
+  return HEX_COLOR_RE.test(v) ? v : PROFILE_COLORS[i % PROFILE_COLORS.length];
+}
+
 function clampSize(v, min, max, fallback) {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
@@ -165,10 +176,7 @@ export function normalizeState(raw) {
       id: typeof p.id === "string" ? p.id : uid(),
       name: typeof p.name === "string" && p.name.trim() ? p.name : `Profile ${i + 1}`,
       enabled: p.enabled !== false,
-      color:
-        typeof p.color === "string"
-          ? p.color
-          : PROFILE_COLORS[i % PROFILE_COLORS.length],
+      color: safeColor(p.color, i),
       requestHeaders: normalizeHeaders(p.requestHeaders),
       responseHeaders: normalizeHeaders(p.responseHeaders),
       urlFilters: normalizeFilters(p.urlFilters),
