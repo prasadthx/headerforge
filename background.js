@@ -104,10 +104,45 @@ function setIconForTheme(state) {
   return chrome.action.setIcon({ path: ICON_PATHS[theme] }).catch(() => {});
 }
 
+// Cosmetic, and strictly best-effort. Painting early means a worker teardown
+// mid-sync cannot strand the badge, but this must never be able to prevent the
+// rule update: an unguarded throw here aborted the whole sync, leaving the
+// previous rules applied while the badge kept its old count — a paused
+// extension that still modified headers, recoverable only by restarting it.
+// declarativeNetRequest dynamic rules persist by design, so nothing else was
+// going to take them down.
+async function paintAction(state) {
+  try {
+    await updateBadge(state);
+    await setIconForTheme(state);
+    return true;
+  } catch (e) {
+    console.error("Badge/icon update failed (ignored):", e);
+    return false;
+  }
+}
+
+// Take every rule down. This is the whole job when paused, so keep it as short
+// as possible: nothing between reading the state and removing the rules.
+async function removeAllRules() {
+  const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  if (existing.length === 0) return;
+  await chrome.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: existing.map((r) => r.id),
+  });
+}
+
 // Last error set written, so an unchanged one is not rewritten on every sync.
 // Undefined after a worker restart, so the first sync always writes and stale
 // errors can never survive.
 let lastErrorsJson;
+
+async function writeErrors(errors) {
+  const json = JSON.stringify(errors);
+  if (json === lastErrorsJson) return;
+  lastErrorsJson = json;
+  await chrome.storage.local.set({ [ERROR_KEY]: errors });
+}
 
 let syncing = Promise.resolve();
 let queued = false;
@@ -125,9 +160,23 @@ function syncRules() {
       queued = false;
       return doSyncRules();
     })
-    .catch((e) => {
+    .catch(async (e) => {
       queued = false;
       console.error(e);
+      // A thrown sync used to be silent: the badge and the applied rules both
+      // kept their previous values with nothing telling the user that what the
+      // popup shows is no longer what the browser is doing.
+      try {
+        await writeErrors([
+          {
+            profile: "",
+            pattern: "",
+            message: `Could not update header rules — ${String(e.message || e)}`,
+          },
+        ]);
+      } catch (_) {
+        /* nothing left to try */
+      }
     });
   return syncing;
 }
@@ -201,13 +250,18 @@ async function applyRuleGroups(groups, removeRuleIds) {
 async function doSyncRules() {
   const state = await loadState();
 
-  // Paint the badge and icon FIRST. Both derive purely from `state`, so they
-  // have no reason to wait on the declarativeNetRequest round-trips below.
-  // Doing them last meant that if the worker was torn down mid-sync, the rules
-  // had already been applied while the badge still showed the previous count —
-  // and nothing repainted it until the extension was restarted.
-  await updateBadge(state);
-  await setIconForTheme(state);
+  const painted = await paintAction(state);
+
+  // Paused is the safety-critical case: getting the rules off matters more than
+  // anything else this function does, so go straight there. Skipping regex
+  // validation and compilation also removes every step that could throw between
+  // reading `paused` and acting on it.
+  if (state.paused) {
+    await removeAllRules();
+    if (!painted) await paintAction(state);
+    await writeErrors([]);
+    return;
+  }
 
   const { byProfile, errors } = await validatePatterns(state);
   const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
@@ -254,19 +308,14 @@ async function doSyncRules() {
   // was dropped at the cap or rejected by the engine, its headers are not
   // applied, so repaint from what actually landed.
   const notApplied = new Set([...dropped, ...failedProfileIds]);
-  if (notApplied.size > 0) {
-    await updateBadge({
+  if (!painted || notApplied.size > 0) {
+    await paintAction({
       ...state,
       profiles: state.profiles.filter((p) => !notApplied.has(p.id)),
     });
   }
 
-  const allErrors = [...errors, ...applyErrors];
-  const json = JSON.stringify(allErrors);
-  if (json !== lastErrorsJson) {
-    lastErrorsJson = json;
-    await chrome.storage.local.set({ [ERROR_KEY]: allErrors });
-  }
+  await writeErrors([...errors, ...applyErrors]);
 }
 
 // --- Lifecycle wiring -------------------------------------------------------
