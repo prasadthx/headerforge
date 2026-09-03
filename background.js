@@ -144,6 +144,23 @@ async function writeErrors(errors) {
   await chrome.storage.local.set({ [ERROR_KEY]: errors });
 }
 
+// A thrown sync used to be silent: the badge and the applied rules both kept
+// their previous values with nothing telling the user that what the popup shows
+// is no longer what the browser is doing.
+async function reportSyncFailure(e) {
+  try {
+    await writeErrors([
+      {
+        profile: "",
+        pattern: "",
+        message: `Could not update header rules — ${String(e.message || e)}`,
+      },
+    ]);
+  } catch (_) {
+    /* nothing left to try */
+  }
+}
+
 let syncing = Promise.resolve();
 let queued = false;
 let consecutiveFailures = 0;
@@ -191,23 +208,13 @@ function syncRules() {
     .then(() => {
       consecutiveFailures = 0;
     })
-    .catch(async (e) => {
+    .catch((e) => {
       queued = false;
       console.error(e);
-      // A thrown sync used to be silent: the badge and the applied rules both
-      // kept their previous values with nothing telling the user that what the
-      // popup shows is no longer what the browser is doing.
-      try {
-        await writeErrors([
-          {
-            profile: "",
-            pattern: "",
-            message: `Could not update header rules — ${String(e.message || e)}`,
-          },
-        ]);
-      } catch (_) {
-        /* nothing left to try */
-      }
+      // Deliberately not awaited. Nothing in this chain may be capable of not
+      // settling: if the error write became part of `syncing`, a hang in it
+      // would stall every later sync exactly like the failure it is reporting.
+      void reportSyncFailure(e);
       // The applied rules are now unverified, and the user may not touch
       // anything again for hours. Retry on a short backoff rather than leaving
       // the browser doing something the popup does not show. Bounded, so a
@@ -391,7 +398,15 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 });
 
-// Allow the popup to force an immediate resync (e.g. right after import).
+// The popup calls this after every write, because storage.onChanged alone does
+// not reliably wake a dormant worker.
+//
+// Do not "simplify" this to a synchronous sendResponse: holding the port open
+// until the sync finishes is what keeps the worker alive long enough to finish
+// it. Responding immediately and returning false would let Chrome reclaim the
+// worker mid-sync, which is the failure this whole path exists to avoid. The
+// caller ignores the response; the timeout in syncRules bounds how long the
+// port can stay open.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "resync") {
     syncRules().then(() => sendResponse({ ok: true }));
