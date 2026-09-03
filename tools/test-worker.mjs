@@ -66,7 +66,13 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
           for (const x of a) if (x in store) o[x] = store[x];
           return o;
         },
-        async set(o) { Object.assign(store, o); },
+        async set(o) {
+          if (hooks.storageSet) {
+            const r = hooks.storageSet(o);
+            if (r) return r;
+          }
+          Object.assign(store, o);
+        },
         async remove(k) { delete store[k]; },
       },
       onChanged: { addListener() {} },
@@ -110,6 +116,27 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
 
 // Each import needs a fresh module instance: background.js keeps worker state
 // (the sync queue, the error cache) at module scope.
+// Wait for a condition rather than for a duration. setTimeout is compressed
+// above, so a fixed sleep is both shorter than it reads and dependent on machine
+// load; polling makes these deterministic.
+function waitFor(predicate, { timeout = 3000, label = "condition" } = {}) {
+  const deadline = Date.now() + timeout;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      let ok = false;
+      try { ok = predicate(); } catch { ok = false; }
+      if (ok) return resolve();
+      if (Date.now() > deadline) return reject(new Error(`timed out waiting for ${label}`));
+      realSetTimeout(tick, 10);
+    };
+    tick();
+  });
+}
+
+function idle(ms = 60) {
+  return new Promise((r) => realSetTimeout(r, ms));
+}
+
 function syncViaMessage() {
   return new Promise((resolve) => {
     if (!globalThis.__onMessage) return resolve();
@@ -120,7 +147,7 @@ function syncViaMessage() {
 
 async function boot(env) {
   await import(`${BG}?t=${bust++}`);
-  await new Promise((r) => setTimeout(r, 120));
+  await idle(80);
   return env;
 }
 
@@ -132,13 +159,14 @@ const quiet = (fn) => {
 
 await test("unpaused state applies the configured headers", async () => {
   const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.appliedHeaders().length === 2, { label: "rules applied" });
   assert.deepEqual(env.appliedHeaders().sort(), ["Authorization", "X-Tenant"]);
   assert.equal(env.badge(), "2");
 });
 
 await test("pausing takes every rule down and shows off", async () => {
   const env = await boot(makeEnv({ paused: true }));
-  assert.deepEqual(env.appliedHeaders(), [], "paused must apply nothing");
+  await waitFor(() => env.appliedHeaders().length === 0, { label: "rules removed" });
   assert.equal(env.badge(), "off");
 });
 
@@ -171,6 +199,9 @@ await test("a sync that throws is surfaced to the popup, not just logged", async
       hooks: { getDynamicRules() { throw new Error("engine unavailable"); } },
     })),
   );
+  await waitFor(() => Array.isArray(env.errors()) && env.errors().length > 0, {
+    label: "the failure to be surfaced",
+  }).catch(() => {});
   const errors = env.errors();
   assert.ok(Array.isArray(errors) && errors.length > 0, "must write an error the UI can render");
   assert.match(errors[0].message, /Could not update header rules/);
@@ -213,9 +244,11 @@ await test("a chrome call that never settles does not wedge the worker", async (
     env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], paused: true };
     for (let i = 0; i < 4; i++) {
       await syncViaMessage();
-      await new Promise((r) => realSetTimeout(r, 60));
+      await idle();
     }
-    await new Promise((r) => realSetTimeout(r, 250));
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "rules removed after the abandoned promise",
+    }).catch(() => {});
   });
 
   assert.deepEqual(
@@ -238,13 +271,50 @@ await test("a failed sync retries on its own", async () => {
   };
   await quiet(async () => {
     await boot(env);
-    await new Promise((r) => realSetTimeout(r, 400));
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "the self-retry to apply the paused state",
+    }).catch(() => {});
   });
   assert.deepEqual(env.appliedHeaders(), [], "the retry must eventually apply the paused state");
 });
 
+
+await test("a hang in the error write does not wedge the chain either", async () => {
+  // The timeout guards doSyncRules, but the catch handler must not be able to
+  // stall the chain on its own account: an async catch awaiting the error write
+  // reintroduced the identical wedge, in the code meant to report it.
+  let failGet = true;
+  let hangSet = true;
+  const env = makeEnv({
+    paused: false,
+    hooks: {
+      getDynamicRules() { if (failGet) { failGet = false; throw new Error("engine hiccup"); } },
+      storageSet(o) {
+        if (hangSet && "headerforge:errors" in o) { hangSet = false; return new Promise(() => {}); }
+        return null;
+      },
+    },
+  });
+  await quiet(async () => {
+    await boot(env);
+    env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], paused: true };
+    for (let i = 0; i < 4; i++) {
+      await syncViaMessage();
+      await idle();
+    }
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "rules removed after a hung error write",
+    }).catch(() => {});
+  });
+  assert.deepEqual(
+    env.appliedHeaders(),
+    [],
+    "reporting a failure must not stop the next sync from happening",
+  );
+});
+
 // Guard against a test silently not running: a hang exits 13, but a skipped
 // test would otherwise let the suite report success with fewer tests.
-const EXPECTED = 8;
+const EXPECTED = 9;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
