@@ -17,6 +17,12 @@ async function test(name, fn) {
 const BG = new URL("../background.js", import.meta.url).href;
 let bust = 0;
 
+// background.js races doSyncRules against a 15s timer. Compress every timer so
+// that path is exercisable in a test without waiting on wall clock.
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) =>
+  realSetTimeout(fn, Math.min(typeof ms === "number" ? ms : 0, 30), ...rest);
+
 // Build a worker environment. `hooks` lets a test make a specific chrome call
 // fail, which is how the real bug manifested.
 function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
@@ -69,7 +75,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       onInstalled: { addListener() {} },
       onStartup: { addListener() {} },
       onUpdateAvailable: { addListener() {} },
-      onMessage: { addListener() {} },
+      onMessage: { addListener(f) { globalThis.__onMessage = f; } },
     },
     action: {
       async setBadgeBackgroundColor() { if (hooks.setBadgeBackgroundColor) hooks.setBadgeBackgroundColor(); },
@@ -104,6 +110,14 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
 
 // Each import needs a fresh module instance: background.js keeps worker state
 // (the sync queue, the error cache) at module scope.
+function syncViaMessage() {
+  return new Promise((resolve) => {
+    if (!globalThis.__onMessage) return resolve();
+    const handled = globalThis.__onMessage({ type: "resync" }, null, () => resolve());
+    if (!handled) resolve();
+  });
+}
+
 async function boot(env) {
   await import(`${BG}?t=${bust++}`);
   await new Promise((r) => setTimeout(r, 120));
@@ -174,4 +188,63 @@ await test("pausing survives a failure in regex validation", async () => {
   assert.deepEqual(env.appliedHeaders(), []);
 });
 
+await test("a chrome call that never settles does not wedge the worker", async () => {
+  // THE INTERMITTENT ONE. Chrome abandons in-flight promises when it tears a
+  // worker down under memory pressure — they neither resolve nor reject. The
+  // sync chain used to stall on one of those permanently: `queued` latched true
+  // and every later syncRules() short-circuited, so the rules already applied
+  // stayed in force for the rest of the worker's life. Restarting the extension
+  // was the only way out. Reproduced before the fix as five resync requests
+  // with zero effect.
+  const env = makeEnv({ paused: false });
+  // Model a genuinely abandoned promise, not a rejection: that is what Chrome
+  // leaves behind when it stops a worker mid-await.
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  let hangOnce = true;
+  dnr.getDynamicRules = async () => {
+    if (hangOnce) { hangOnce = false; return new Promise(() => {}); }
+    return realGet.call(dnr);
+  };
+
+  await quiet(async () => {
+    await boot(env);
+    // The user pauses after the hang. This must still take the rules down.
+    env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], paused: true };
+    for (let i = 0; i < 4; i++) {
+      await syncViaMessage();
+      await new Promise((r) => realSetTimeout(r, 60));
+    }
+    await new Promise((r) => realSetTimeout(r, 250));
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders(),
+    [],
+    "a single abandoned promise must not stop every later sync",
+  );
+});
+
+await test("a failed sync retries on its own", async () => {
+  // After a failure the applied rules are unverified and the user may not touch
+  // anything for hours, so recovery cannot depend on them acting.
+  let failures = 2;
+  const env = makeEnv({ paused: true, hooks: {} });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  dnr.getDynamicRules = async () => {
+    if (failures-- > 0) throw new Error("engine busy");
+    return realGet.call(dnr);
+  };
+  await quiet(async () => {
+    await boot(env);
+    await new Promise((r) => realSetTimeout(r, 400));
+  });
+  assert.deepEqual(env.appliedHeaders(), [], "the retry must eventually apply the paused state");
+});
+
+// Guard against a test silently not running: a hang exits 13, but a skipped
+// test would otherwise let the suite report success with fewer tests.
+const EXPECTED = 8;
+assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);

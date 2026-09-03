@@ -146,6 +146,31 @@ async function writeErrors(errors) {
 
 let syncing = Promise.resolve();
 let queued = false;
+let consecutiveFailures = 0;
+
+// A chrome API call that never settles must not be able to stall the chain.
+// When Chrome tears a worker down mid-await, the in-flight promise is abandoned
+// — it neither resolves nor rejects — and because every later syncRules()
+// chained onto it, the worker silently stopped syncing for the rest of its
+// life while the rules already applied stayed in force. That is the "paused but
+// headers still applied, only fixed by restarting the extension" report, and it
+// gets likelier the longer Chrome has been running and the more tabs compete
+// for memory. Racing a timer guarantees the chain always moves on.
+const SYNC_TIMEOUT_MS = 15000;
+const MAX_SYNC_RETRIES = 3;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms}ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 // Serialize rule updates so rapid edits from the popup don't race each other.
 // Coalesce them too: every state change now arrives twice (once via
@@ -158,7 +183,13 @@ function syncRules() {
   syncing = syncing
     .then(() => {
       queued = false;
-      return doSyncRules();
+      // Never chain onto a bare doSyncRules(): if it cannot settle, neither can
+      // `syncing`, and then this callback never runs again — leaving `queued`
+      // latched true so every future call short-circuits at the guard above.
+      return withTimeout(doSyncRules(), SYNC_TIMEOUT_MS, "Rule sync");
+    })
+    .then(() => {
+      consecutiveFailures = 0;
     })
     .catch(async (e) => {
       queued = false;
@@ -176,6 +207,13 @@ function syncRules() {
         ]);
       } catch (_) {
         /* nothing left to try */
+      }
+      // The applied rules are now unverified, and the user may not touch
+      // anything again for hours. Retry on a short backoff rather than leaving
+      // the browser doing something the popup does not show. Bounded, so a
+      // persistently broken engine cannot spin.
+      if (++consecutiveFailures <= MAX_SYNC_RETRIES) {
+        setTimeout(() => syncRules(), 1000 * consecutiveFailures);
       }
     });
   return syncing;

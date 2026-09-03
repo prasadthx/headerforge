@@ -1,6 +1,6 @@
 {
   "name": "headerforge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "A fast, modern, open-source HTTP header modifier browser extension (ModHeader alternative).",
   "private": true,
   "type": "module",
