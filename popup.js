@@ -614,15 +614,24 @@ function effectiveTheme() {
   return state.theme;
 }
 
+// Last resolved theme pushed to the toolbar / written to storage, so reopening
+// the settings panel or adopting an unrelated external change does not re-read
+// the icon PNGs and rewrite a value that has not moved.
+let appliedIconTheme;
+
 function applyTheme() {
   const theme = effectiveTheme();
   document.documentElement.setAttribute("data-theme", theme);
-  dom.brandLogo.src = `icons/icon${theme === "dark" ? "48-dark" : "48"}.png`;
   dom.themeBtn.title = `Theme: ${state.theme} (click to change)`;
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {});
+  if (theme === appliedIconTheme) return;
+  appliedIconTheme = theme;
+  dom.brandLogo.src = `icons/icon${theme === "dark" ? "48-dark" : "48"}.png`;
+  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {
+    if (appliedIconTheme === theme) appliedIconTheme = undefined;
+  });
   // Remember the resolution so the worker can pick the right icon on a cold
   // start, when it has no way to evaluate "system" itself.
   chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: theme });

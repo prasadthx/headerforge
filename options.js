@@ -22,14 +22,22 @@ function effectiveTheme(t) {
   if (t === "system") return darkMedia.matches ? "dark" : "light";
   return t;
 }
+// See popup.js: applyTheme also runs on every adopted external change, so the
+// icon read and the storage write are memoised on the resolved theme.
+let appliedIconTheme;
+
 function applyTheme() {
   const theme = effectiveTheme(state.theme);
   document.documentElement.setAttribute("data-theme", theme);
-  $("pageLogo").src = `icons/icon${theme === "dark" ? "128-dark" : "128"}.png`;
   document
     .querySelectorAll("[data-theme-opt]")
     .forEach((b) => b.classList.toggle("is-active", b.dataset.themeOpt === state.theme));
-  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {});
+  if (theme === appliedIconTheme) return;
+  appliedIconTheme = theme;
+  $("pageLogo").src = `icons/icon${theme === "dark" ? "128-dark" : "128"}.png`;
+  chrome.action?.setIcon?.({ path: ICON_PATHS[theme] }).catch?.(() => {
+    if (appliedIconTheme === theme) appliedIconTheme = undefined;
+  });
   chrome.storage?.local?.set?.({ [RESOLVED_THEME_KEY]: theme });
 }
 

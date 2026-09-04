@@ -58,6 +58,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
   let badge = "2";
   const alarms = new Set();
   let onAlarm = null;
+  const iconPaths = [];
 
   globalThis.chrome = {
     storage: {
@@ -94,7 +95,9 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       async setBadgeBackgroundColor() { if (hooks.setBadgeBackgroundColor) hooks.setBadgeBackgroundColor(); },
       async setBadgeText(o) { badge = o.text; },
       async setTitle() {},
-      async setIcon() {},
+      // Records what setIcon was asked for. Each call re-reads and decodes all
+      // three PNGs from disk in the real browser.
+      async setIcon(o) { iconPaths.push(o.path["16"]); },
     },
     declarativeNetRequest: {
       MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000,
@@ -122,6 +125,8 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
     // Stand in for Chrome firing an alarm after the worker that scheduled the
     // setTimeout retries has been torn down.
     fireAlarm: (name) => onAlarm && onAlarm({ name }),
+    iconCalls: () => iconPaths.length,
+    iconPaths: () => [...iconPaths],
   };
 }
 
@@ -457,6 +462,39 @@ await test("the retry alarm recovers a sync whose fast retries were all lost", a
   assert.equal(env.badge(), "off");
 });
 
-const EXPECTED = 13;
+await test("an unchanged icon is not re-read on every sync", async () => {
+  // setIcon re-reads and decodes all three PNGs from disk, and paintAction runs
+  // on every sync — every debounced keystroke — so re-pushing an unchanged icon
+  // spent three file reads per edit for nothing. Measured over a 20-edit
+  // session before this: 21 calls, 63 reads, one distinct theme.
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.iconCalls() === 1, { label: "the cold-start paint" });
+  for (let i = 0; i < 5; i++) {
+    await syncViaMessage();
+    await idle(20);
+  }
+  assert.equal(
+    env.iconCalls(),
+    1,
+    "only the cold-start paint should touch the icon PNGs",
+  );
+});
+
+await test("a theme change still repaints the icon", async () => {
+  // The memo must not resurrect the bug it sits next to: setIcon does not
+  // survive a browser restart, so a dark-mode user whose icon is never
+  // repainted is left staring at the light one.
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.iconCalls() === 1, { label: "the cold-start paint" });
+  env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], theme: "dark" };
+  await syncViaMessage();
+  await waitFor(() => env.iconCalls() === 2, { label: "the dark repaint" }).catch(() => {});
+  assert.deepEqual(env.iconPaths(), [
+    "icons/icon16.png",
+    "icons/icon16-dark.png",
+  ]);
+});
+
+const EXPECTED = 15;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
