@@ -199,6 +199,47 @@ let syncEpoch = 0;
 const SYNC_TIMEOUT_MS = 15000;
 const MAX_SYNC_RETRIES = 3;
 
+// Durable backstop for the in-worker retry below.
+//
+// setTimeout neither keeps a service worker alive nor survives its teardown, so
+// a sync that fails near the end of the idle window loses every retry it
+// scheduled. declarativeNetRequest rules persist, so the browser is then left
+// applying headers the user has already switched off, with nothing scheduled to
+// put that right until some unrelated event happens to wake the worker — which,
+// if the user has stopped touching the extension, may be not until the next
+// browser restart. An alarm survives a teardown and wakes the worker itself.
+//
+// Chrome clamps alarm delays to ~30s in release builds, so this stays strictly
+// a backstop: the setTimeout retries above it are what recover quickly.
+const RETRY_ALARM = "headerforge:retry";
+
+// Whether we have a backstop outstanding, so the success path does not spend an
+// API call clearing an alarm that was never set. A worker teardown resets this
+// while leaving the alarm in place; that costs one redundant sync when it
+// fires, which is harmless and self-limiting because the alarm is one-shot.
+let durableRetryPending = false;
+
+function scheduleDurableRetry() {
+  durableRetryPending = true;
+  try {
+    const r = chrome.alarms.create(RETRY_ALARM, { delayInMinutes: 1 });
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (e) {
+    console.error("Could not schedule the retry alarm (ignored):", e);
+  }
+}
+
+function clearDurableRetry() {
+  if (!durableRetryPending) return;
+  durableRetryPending = false;
+  try {
+    const r = chrome.alarms.clear(RETRY_ALARM);
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (_) {
+    /* nothing to clean up */
+  }
+}
+
 function withTimeout(promise, ms, label) {
   let timer;
   return Promise.race([
@@ -230,6 +271,7 @@ function syncRules() {
     })
     .then(() => {
       consecutiveFailures = 0;
+      clearDurableRetry();
     })
     .catch((e) => {
       queued = false;
@@ -249,6 +291,10 @@ function syncRules() {
       if (++consecutiveFailures <= MAX_SYNC_RETRIES) {
         setTimeout(() => syncRules(), 1000 * consecutiveFailures);
       }
+      // Armed regardless of whether a fast retry was scheduled: the point is to
+      // survive the worker dying before those retries ever run, and to leave
+      // something behind once they are exhausted.
+      scheduleDurableRetry();
     });
   return syncing;
 }
@@ -416,6 +462,15 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 chrome.runtime.onStartup.addListener(() => syncRules());
+
+// A retry that outlived the worker that scheduled it. The sync it was standing
+// in for never ran, so run it now.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm && alarm.name === RETRY_ALARM) {
+    durableRetryPending = false;
+    syncRules();
+  }
+});
 
 // When Chrome has a newer version staged, record it so the UI can offer a
 // one-click reload instead of waiting for the next browser restart.
