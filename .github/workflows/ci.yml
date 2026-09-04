@@ -19,7 +19,7 @@ jobs:
     name: tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # One version is enough: the extension never runs on Node, which is only
       # the test runner, so a matrix would be verifying something we do not
@@ -33,7 +33,7 @@ jobs:
       # floor on the test runner, not on the extension — Chrome has it in both
       # the popup and the service worker well below the manifest's minimum
       # of 111.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
