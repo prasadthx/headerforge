@@ -121,8 +121,9 @@ npm run icons     # regenerate PNG icons from tools/gen-icons.py (Python 3)
 | `tools/test-worker.mjs` | `background.js` against a stubbed MV3 environment |
 | `tools/check-package.mjs` | manifest/version integrity, icon presence, and a parse check over `popup.js` and `options.js`, which need a DOM and so are not imported by any test |
 
-CI runs the same command on the supported Node versions for every push and pull
-request; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs the same command on every push and pull request, on the oldest supported
+Node line (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)), so
+anything green there also passes on newer Node.
 
 Edit any file, then click **Reload** on the extension card to see changes.
 
