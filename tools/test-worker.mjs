@@ -313,8 +313,84 @@ await test("a hang in the error write does not wedge the chain either", async ()
   );
 });
 
+await test("a timed-out sync must not re-apply headers after a pause", async () => {
+  // THE ONE USERS REPORTED ON 1.2.1. The 15s race stops a stalled call from
+  // wedging the chain, but it does not cancel the work: the call eventually
+  // returns and the rest of doSyncRules writes rules it compiled from
+  // *pre-pause* state. declarativeNetRequest rules persist, so the headers came
+  // back after the user paused, with the badge still reading "off" and only an
+  // extension restart clearing it. Distinct from the never-settling case above:
+  // that promise is abandoned forever, this one comes back.
+  const env = makeEnv({ paused: false });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  let release = null;
+  let stallNext = true;
+  dnr.getDynamicRules = async () => {
+    if (stallNext) {
+      stallNext = false;
+      await new Promise((r) => { release = r; });
+    }
+    return realGet.call(dnr);
+  };
+
+  await quiet(async () => {
+    await boot(env); // sync A stalls, then loses the race
+    await waitFor(() => release !== null, { label: "sync A to stall" });
+    // The user pauses while A is still out there.
+    env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], paused: true };
+    await syncViaMessage();
+    await waitFor(() => env.appliedHeaders().length === 0, { label: "pause to take effect" });
+    release(); // A's stalled call finally returns and A carries on
+    await idle(200);
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders(),
+    [],
+    "an abandoned sync must not resurrect the headers the user paused",
+  );
+  assert.equal(env.badge(), "off");
+});
+
+await test("a timed-out paused sync must not wipe what a resume just applied", async () => {
+  // Mirror image of the above: the stale sync is the paused one. Its read
+  // returns after the user has resumed and a newer sync has applied the rules,
+  // and removing them then leaves every header off with nothing to restore
+  // them, because the sync that would have has already finished.
+  const env = makeEnv({ paused: true });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  let release = null;
+  let stallNext = true;
+  dnr.getDynamicRules = async () => {
+    if (stallNext) {
+      stallNext = false;
+      await new Promise((r) => { release = r; });
+    }
+    return realGet.call(dnr);
+  };
+
+  await quiet(async () => {
+    await boot(env); // sync A (paused) stalls inside removeAllRules
+    await waitFor(() => release !== null, { label: "sync A to stall" });
+    env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], paused: false };
+    await syncViaMessage();
+    await waitFor(() => env.appliedHeaders().length === 2, { label: "resume to apply rules" });
+    release();
+    await idle(200);
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders().sort(),
+    ["Authorization", "X-Tenant"],
+    "an abandoned paused sync must not switch a resumed profile back off",
+  );
+  assert.equal(env.badge(), "2");
+});
+
 // Guard against a test silently not running: a hang exits 13, but a skipped
 // test would otherwise let the suite report success with fewer tests.
-const EXPECTED = 9;
+const EXPECTED = 11;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);

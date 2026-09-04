@@ -124,9 +124,14 @@ async function paintAction(state) {
 
 // Take every rule down. This is the whole job when paused, so keep it as short
 // as possible: nothing between reading the state and removing the rules.
-async function removeAllRules() {
+async function removeAllRules(isCurrent) {
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
   if (existing.length === 0) return;
+  // Mirror image of the stale-apply bug: this read can return after a newer
+  // sync has already applied rules for a state the user has since resumed.
+  // Removing them then switches every header off with nothing left to put them
+  // back, because the sync that would have is already finished.
+  if (isCurrent && !isCurrent()) return;
   await chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: existing.map((r) => r.id),
   });
@@ -164,6 +169,24 @@ async function reportSyncFailure(e) {
 let syncing = Promise.resolve();
 let queued = false;
 let consecutiveFailures = 0;
+
+// Generation guard.
+//
+// syncRules races doSyncRules against SYNC_TIMEOUT_MS so one stalled chrome
+// call cannot wedge the chain. But losing that race does not *stop* the work:
+// the call eventually returns and the rest of doSyncRules carries on, holding
+// state it read before the user's most recent change. Because
+// declarativeNetRequest dynamic rules persist by design, that late write
+// re-applied headers the user had already paused — badge "off", rules live,
+// clearable only by restarting the extension — and repainted the badge from a
+// state that no longer existed, which is the badge showing a count that does
+// not match what is actually applied.
+//
+// Every write below is therefore gated on this sync still being the current
+// generation. Bailing out is always safe: the only thing that can supersede a
+// sync is a newer one, and each one re-reads the latest state and does the
+// whole job.
+let syncEpoch = 0;
 
 // A chrome API call that never settles must not be able to stall the chain.
 // When Chrome tears a worker down mid-await, the in-flight promise is abandoned
@@ -210,6 +233,10 @@ function syncRules() {
     })
     .catch((e) => {
       queued = false;
+      // The sync we gave up on may still be running (a timeout abandons it, it
+      // does not cancel it). Retire its generation now so it cannot write once
+      // its stalled call finally returns.
+      syncEpoch++;
       console.error(e);
       // Deliberately not awaited. Nothing in this chain may be capable of not
       // settling: if the error write became part of `syncing`, a hang in it
@@ -293,22 +320,28 @@ async function applyRuleGroups(groups, removeRuleIds) {
 }
 
 async function doSyncRules() {
+  const epoch = ++syncEpoch;
+  const current = () => epoch === syncEpoch;
+
   const state = await loadState();
+  if (!current()) return;
 
   const painted = await paintAction(state);
+  if (!current()) return;
 
   // Paused is the safety-critical case: getting the rules off matters more than
   // anything else this function does, so go straight there. Skipping regex
   // validation and compilation also removes every step that could throw between
   // reading `paused` and acting on it.
   if (state.paused) {
-    await removeAllRules();
+    await removeAllRules(current);
     if (!painted) await paintAction(state);
     await writeErrors([]);
     return;
   }
 
   const { byProfile, errors } = await validatePatterns(state);
+  if (!current()) return;
   const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
     errors.push({
       profile: profile.name,
@@ -343,11 +376,13 @@ async function doSyncRules() {
   }
 
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
+  if (!current()) return;
   const removeRuleIds = existing.map((r) => r.id);
   const { errors: applyErrors, failedProfileIds } = await applyRuleGroups(
     groups,
     removeRuleIds,
   );
+  if (!current()) return;
 
   // The optimistic badge above counted every locally-valid header. If a profile
   // was dropped at the cap or rejected by the engine, its headers are not
