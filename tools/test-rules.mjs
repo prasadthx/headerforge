@@ -755,4 +755,34 @@ test("a pre-settings blob upgrades without losing anything", () => {
   assert.equal(out.popupWidth, 470);
 });
 
+test("the badge does not count a header whose value cannot be applied", () => {
+  // headerActions screens the name *and* the value; the badge used to screen
+  // only the name. A newline in the value is dropped from the compiled rules,
+  // so counting it made the toolbar advertise a header that was never applied.
+  const p = makeProfile("P", 0);
+  p.requestHeaders = [makeHeader("X-Ok", "1"), makeHeader("X-Bad", "a\nb")];
+  const state = normalizeState({ profiles: [p] });
+  assert.equal(headerActions(state.profiles[0].requestHeaders).length, 1);
+  assert.equal(countActiveHeaders(state), 1, "badge must match the compiled rules");
+  assert.equal(compileRules(state).length, 1);
+});
+
+test("a profile whose only header has an unusable value is not listed as live", () => {
+  const p = makeProfile("Broken", 0);
+  p.requestHeaders = [makeHeader("X-Bad", "a\r\nb")];
+  const state = normalizeState({ profiles: [p] });
+  assert.equal(hasApplicableHeaders(state.profiles[0]), false);
+  assert.deepEqual(precedenceOrder(state), [], "live-order box must not name it");
+  assert.equal(countActiveHeaders(state), 0);
+});
+
+test("a remove operation is still counted, since it carries no value", () => {
+  // Value screening must not accidentally drop "remove", which never has one.
+  const p = makeProfile("P", 0);
+  p.requestHeaders = [makeHeader("X-Drop", "", "remove")];
+  const state = normalizeState({ profiles: [p] });
+  assert.equal(countActiveHeaders(state), 1);
+  assert.equal(compileRules(state).length, 1);
+});
+
 console.log(`\n${passed} tests passed`);
