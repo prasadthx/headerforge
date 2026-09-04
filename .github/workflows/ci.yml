@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing in this workflow needs write access to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # One version is enough: the extension never runs on Node, which is only
+      # the test runner, so a matrix would be verifying something we do not
+      # ship. Pinning the *oldest* supported line rather than the newest makes
+      # this the binding constraint — code cannot quietly start depending on an
+      # API only newer Node has, and anything green here also passes above it.
+      #
+      # Keep in step with engines.node in package.json. Node 18 and 20 are both
+      # past end of life, and 18 cannot run the suite at all: state.js calls the
+      # global `crypto`, which Node only exposes unflagged from 19. That is a
+      # floor on the test runner, not on the extension — Chrome has it in both
+      # the popup and the service worker well below the manifest's minimum
+      # of 111.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # No install step on purpose: package.json declares no dependencies, so
+      # there is nothing to fetch, no lockfile, and nothing to cache. If a
+      # dependency is ever added, this needs `npm ci` and a cache key.
+      - name: Assert there is still nothing to install
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+            const n = Object.keys(deps).length;
+            if (n > 0) {
+              console.error(`package.json now has ${n} dependencies; add an "npm ci" step.`);
+              process.exit(1);
+            }
+          '
+
+      # rule-compiler units, stubbed-worker units, and the static package checks
+      # (manifest/version integrity, icon presence, and a parse check over the
+      # files no test imports).
+      - name: npm test
+        run: npm test

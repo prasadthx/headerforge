@@ -5,8 +5,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tools/test-rules.mjs && node tools/test-worker.mjs",
+    "test": "node tools/test-rules.mjs && node tools/test-worker.mjs && node tools/check-package.mjs",
     "icons": "python3 tools/gen-icons.py"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
 }
