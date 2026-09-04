@@ -7,7 +7,7 @@ HeaderForge already meets the hard technical requirements:
 - **Manifest V3** — required for all new items. ✅
 - **No remote code** — all JS ships in the package; nothing is fetched/eval'd. ✅
 - **Single purpose** — modifying HTTP headers. ✅ (a clear, allowed purpose)
-- **Minimal permissions** — `declarativeNetRequest` + `storage` + host access. ✅
+- **Minimal permissions** — `declarativeNetRequest` + `storage` + `alarms` + host access. ✅
 - **No data collection** — nothing leaves the device. ✅ (easy privacy disclosure)
 - **Icons** — 16/48/128 present. ✅
 
@@ -75,6 +75,9 @@ Upload `headerforge-1.1.0.zip` in the developer console.
 - **`declarativeNetRequest`** — "Core function: add, modify, and remove HTTP
   headers via declarative rules the user configures."
 - **`storage`** — "Save the user's header profiles and preferences locally."
+- **`alarms`** — "Retry a failed header-rule update after the service worker has
+  been shut down. Without it a failed sync can leave the extension applying
+  headers the user has already paused."
 - **Host permission `<all_urls>`** — "Required by declarativeNetRequest so the
   user's header rules can apply to whichever sites they target. The extension
   does not read page content; it only applies the user's header rules."

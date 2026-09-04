@@ -11,6 +11,10 @@ everything stays in your browser.
   <img src="icons/icon128.png?v=1.1.0" width="96" alt="HeaderForge icon" />
 </p>
 
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/headerforge-http-header-m/ooemlhcpmlegafiiecdgdgfaomhaephl"><strong>➜ Install from the Chrome Web Store</strong></a>
+</p>
+
 ## Features
 
 - **Request & response headers** — set, append, or remove any header.
@@ -42,9 +46,19 @@ everything stays in your browser.
 - **Private by design** — no network calls, no analytics. Your headers never
   leave your machine.
 
-## Install (load unpacked)
+## Install
 
-Because this isn't published to the Web Store, load it directly:
+### From the Chrome Web Store (recommended)
+
+**[Install HeaderForge from the Chrome Web Store](https://chromewebstore.google.com/detail/headerforge-http-header-m/ooemlhcpmlegafiiecdgdgfaomhaephl)**
+
+Works in Chrome, Edge, Brave and other Chromium browsers. Updates install
+themselves; the About card's **Check for updates** button forces a check if you
+don't want to wait.
+
+### Load unpacked (development)
+
+To run modified or unreleased code:
 
 1. Clone or download this repository.
 2. Open `chrome://extensions` (or `edge://extensions`, `brave://extensions`).
@@ -119,6 +133,7 @@ Edit any file, then click **Reload** on the extension card to see changes.
 |------------|-----|
 | `declarativeNetRequest` | Add/modify/remove headers on network requests. |
 | `storage` | Save your profiles locally. |
+| `alarms` | Re-run a failed rule sync after the service worker is shut down, so a pause can never be left half-applied. |
 | `<all_urls>` (host) | Required by `declarativeNetRequest` to edit headers on the sites you choose. |
 
 The extension makes **no** outbound network requests of its own.
@@ -130,12 +145,13 @@ extension updates. HeaderForge keeps `STORAGE_KEY` stable forever and runs a
 `migrate()` step on update, so shipping a new version never wipes saved headers —
 new optional fields fall back to defaults automatically.
 
-## Publishing to the Chrome Web Store
+## Chrome Web Store listing
 
-See [STORE.md](STORE.md) for a feasibility check, the exact packaging command,
-ready-to-paste listing copy, and permission justifications. The current release
-package (`headerforge-1.1.0.zip`, containing only the files the extension needs)
-is built and ready to upload.
+HeaderForge is published at
+<https://chromewebstore.google.com/detail/headerforge-http-header-m/ooemlhcpmlegafiiecdgdgfaomhaephl>.
+
+[STORE.md](STORE.md) keeps the packaging command, listing copy and permission
+justifications used for submission, for reuse on future updates.
 
 ## Privacy
 
