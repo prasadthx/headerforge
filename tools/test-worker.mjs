@@ -56,6 +56,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
     { id: 2, priority: 1, action: { type: "modifyHeaders", requestHeaders: [{ header: "X-Tenant", operation: "set", value: "acme" }] }, condition: { resourceTypes: ["main_frame"] } },
   ];
   let badge = "2";
+  const iconPaths = [];
 
   globalThis.chrome = {
     storage: {
@@ -87,7 +88,9 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       async setBadgeBackgroundColor() { if (hooks.setBadgeBackgroundColor) hooks.setBadgeBackgroundColor(); },
       async setBadgeText(o) { badge = o.text; },
       async setTitle() {},
-      async setIcon() {},
+      // Records what setIcon was asked for. Each call re-reads and decodes all
+      // three PNGs from disk in the real browser.
+      async setIcon(o) { iconPaths.push(o.path["16"]); },
     },
     declarativeNetRequest: {
       MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES: 5000,
@@ -111,6 +114,8 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       dynamicRules.flatMap((r) => (r.action.requestHeaders || []).map((h) => h.header)),
     badge: () => badge,
     errors: () => store["headerforge:errors"],
+    iconCalls: () => iconPaths.length,
+    iconPaths: () => [...iconPaths],
   };
 }
 
@@ -391,6 +396,39 @@ await test("a timed-out paused sync must not wipe what a resume just applied", a
 
 // Guard against a test silently not running: a hang exits 13, but a skipped
 // test would otherwise let the suite report success with fewer tests.
-const EXPECTED = 11;
+await test("an unchanged icon is not re-read on every sync", async () => {
+  // setIcon re-reads and decodes all three PNGs from disk, and paintAction runs
+  // on every sync — every debounced keystroke — so re-pushing an unchanged icon
+  // spent three file reads per edit for nothing. Measured over a 20-edit
+  // session before this: 21 calls, 63 reads, one distinct theme.
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.iconCalls() === 1, { label: "the cold-start paint" });
+  for (let i = 0; i < 5; i++) {
+    await syncViaMessage();
+    await idle(20);
+  }
+  assert.equal(
+    env.iconCalls(),
+    1,
+    "only the cold-start paint should touch the icon PNGs",
+  );
+});
+
+await test("a theme change still repaints the icon", async () => {
+  // The memo must not resurrect the bug it sits next to: setIcon does not
+  // survive a browser restart, so a dark-mode user whose icon is never
+  // repainted is left staring at the light one.
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.iconCalls() === 1, { label: "the cold-start paint" });
+  env.store["headerforge:v1"] = { ...env.store["headerforge:v1"], theme: "dark" };
+  await syncViaMessage();
+  await waitFor(() => env.iconCalls() === 2, { label: "the dark repaint" }).catch(() => {});
+  assert.deepEqual(env.iconPaths(), [
+    "icons/icon16.png",
+    "icons/icon16-dark.png",
+  ]);
+});
+
+const EXPECTED = 13;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
