@@ -6,6 +6,7 @@
   "homepage_url": "https://github.com/prasadthx/headerforge",
   "minimum_chrome_version": "111",
   "permissions": [
+    "alarms",
     "declarativeNetRequest",
     "storage"
   ],
