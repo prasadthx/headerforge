@@ -56,6 +56,8 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
     { id: 2, priority: 1, action: { type: "modifyHeaders", requestHeaders: [{ header: "X-Tenant", operation: "set", value: "acme" }] }, condition: { resourceTypes: ["main_frame"] } },
   ];
   let badge = "2";
+  const alarms = new Set();
+  let onAlarm = null;
 
   globalThis.chrome = {
     storage: {
@@ -82,6 +84,11 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       onStartup: { addListener() {} },
       onUpdateAvailable: { addListener() {} },
       onMessage: { addListener(f) { globalThis.__onMessage = f; } },
+    },
+    alarms: {
+      async create(name) { alarms.add(name); },
+      async clear(name) { alarms.delete(name); },
+      onAlarm: { addListener(f) { onAlarm = f; } },
     },
     action: {
       async setBadgeBackgroundColor() { if (hooks.setBadgeBackgroundColor) hooks.setBadgeBackgroundColor(); },
@@ -111,6 +118,10 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
       dynamicRules.flatMap((r) => (r.action.requestHeaders || []).map((h) => h.header)),
     badge: () => badge,
     errors: () => store["headerforge:errors"],
+    alarms: () => [...alarms],
+    // Stand in for Chrome firing an alarm after the worker that scheduled the
+    // setTimeout retries has been torn down.
+    fireAlarm: (name) => onAlarm && onAlarm({ name }),
   };
 }
 
@@ -391,6 +402,61 @@ await test("a timed-out paused sync must not wipe what a resume just applied", a
 
 // Guard against a test silently not running: a hang exits 13, but a skipped
 // test would otherwise let the suite report success with fewer tests.
-const EXPECTED = 11;
+await test("a failed sync leaves a durable retry behind", async () => {
+  // setTimeout neither keeps a service worker alive nor survives its teardown,
+  // so a sync that fails near the end of the idle window loses every retry it
+  // scheduled -- and DNR keeps applying whatever was last written.
+  const env = makeEnv({
+    paused: true,
+    hooks: { getDynamicRules() { throw new Error("engine down"); } },
+  });
+  await quiet(async () => {
+    await boot(env);
+    await waitFor(() => env.alarms().includes("headerforge:retry"), {
+      label: "the retry alarm",
+    }).catch(() => {});
+  });
+  assert.ok(
+    env.alarms().includes("headerforge:retry"),
+    "a failed sync must leave something behind that outlives the worker",
+  );
+});
+
+await test("the retry alarm recovers a sync whose fast retries were all lost", async () => {
+  // Exactly MAX_SYNC_RETRIES + 1 failures, so every in-worker retry is spent
+  // and the paused rules are still applied. The alarm is then the only thing
+  // left that can put it right.
+  let failures = 4;
+  const env = makeEnv({ paused: true });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  dnr.getDynamicRules = async () => {
+    if (failures-- > 0) throw new Error("engine down");
+    return realGet.call(dnr);
+  };
+
+  await quiet(async () => {
+    await boot(env);
+    await waitFor(() => failures <= 0, { label: "the fast retries to be spent" }).catch(() => {});
+    assert.deepEqual(
+      env.appliedHeaders().sort(),
+      ["Authorization", "X-Tenant"],
+      "sanity: with every retry failing the paused rules are still applied",
+    );
+    env.fireAlarm("headerforge:retry");
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "the alarm-driven sync",
+    }).catch(() => {});
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders(),
+    [],
+    "the alarm must drive the sync the exhausted retries could not",
+  );
+  assert.equal(env.badge(), "off");
+});
+
+const EXPECTED = 13;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
