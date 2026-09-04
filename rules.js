@@ -48,9 +48,21 @@ export function headerActions(headers, onSkip) {
   return out;
 }
 
-// Does this profile contribute anything the engine will accept? Uses the same
-// predicate as headerActions so the sidebar, the badge and the compiled rules
-// can never disagree about which profiles are live.
+// Will headerActions actually emit an action for this entry? This is the single
+// predicate the sidebar, the badge and the compiled rules all share, so they
+// cannot disagree about what is live. It must mirror headerActions exactly:
+// screening only the name counted a header whose *value* carries CR/LF/NUL,
+// which headerActions drops — the badge showed a header that was never applied,
+// and the live-order box named a profile contributing nothing.
+function isApplicable(h) {
+  if (!h.enabled) return false;
+  if (!isValidHeaderName((h.name || "").trim())) return false;
+  // "remove" carries no value, so value screening does not apply to it.
+  if (h.operation === "remove") return true;
+  return isValidHeaderValue(h.value ?? "");
+}
+
+// Does this profile contribute anything the engine will accept?
 export function hasApplicableHeaders(profile) {
   return (
     anyApplicable(profile.requestHeaders) ||
@@ -60,7 +72,7 @@ export function hasApplicableHeaders(profile) {
 
 function anyApplicable(headers) {
   for (const h of headers) {
-    if (h.enabled && isValidHeaderName((h.name || "").trim())) return true;
+    if (isApplicable(h)) return true;
   }
   return false;
 }
@@ -148,7 +160,7 @@ export function compileRules(state, validPatternsByProfileId = {}, onSkip) {
 function countApplicable(headers) {
   let n = 0;
   for (const h of headers) {
-    if (h.enabled && isValidHeaderName((h.name || "").trim())) n++;
+    if (isApplicable(h)) n++;
   }
   return n;
 }
