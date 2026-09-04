@@ -1,5 +1,7 @@
 # HeaderForge
 
+[![CI](https://github.com/prasadthx/headerforge/actions/workflows/ci.yml/badge.svg)](https://github.com/prasadthx/headerforge/actions/workflows/ci.yml)
+
 A fast, modern, open-source browser extension to **add, modify, and remove HTTP
 request and response headers** — a clean, open-source alternative to ModHeader.
 
@@ -107,9 +109,20 @@ your headers keep working even when the popup is closed.
 No build step. The only tooling is optional:
 
 ```bash
-npm test          # run the rule-compiler unit tests (Node, no deps)
+npm test          # unit tests + static package checks (Node, no deps)
 npm run icons     # regenerate PNG icons from tools/gen-icons.py (Python 3)
 ```
+
+`npm test` runs three suites, all dependency-free:
+
+| Suite | Covers |
+|-------|--------|
+| `tools/test-rules.mjs` | the pure rule compiler and state normalisation |
+| `tools/test-worker.mjs` | `background.js` against a stubbed MV3 environment |
+| `tools/check-package.mjs` | manifest/version integrity, icon presence, and a parse check over `popup.js` and `options.js`, which need a DOM and so are not imported by any test |
+
+CI runs the same command on the supported Node versions for every push and pull
+request; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 Edit any file, then click **Reload** on the extension card to see changes.
 

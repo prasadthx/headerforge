@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing in this workflow needs write access to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every version that fails, not just the first.
+      fail-fast: false
+      matrix:
+        # The two Node lines still in support. Node 18 and 20 are both past end
+        # of life, and 18 cannot run the suite anyway: state.js calls the global
+        # `crypto`, which Node only exposes unflagged from 19. That is a floor
+        # on the test runner, not on the extension — Chrome has it in both the
+        # popup and the service worker well below the manifest's minimum of 111.
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step on purpose: package.json declares no dependencies, so
+      # there is nothing to fetch, no lockfile, and nothing to cache. If a
+      # dependency is ever added, this needs `npm ci` and a cache key.
+      - name: Assert there is still nothing to install
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+            const n = Object.keys(deps).length;
+            if (n > 0) {
+              console.error(`package.json now has ${n} dependencies; add an "npm ci" step.`);
+              process.exit(1);
+            }
+          '
+
+      # rule-compiler units, stubbed-worker units, and the static package checks
+      # (manifest/version integrity, icon presence, and a parse check over the
+      # files no test imports).
+      - name: npm test
+        run: npm test
