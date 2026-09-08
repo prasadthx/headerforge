@@ -149,14 +149,75 @@ function currentProfile() {
 // the only way out was restarting the extension (which re-runs syncRules at
 // module scope). runtime.sendMessage does reliably wake the worker, so we send
 // it after the write has landed.
-async function commit() {
-  await chrome.storage.local.set({ [STORAGE_KEY]: state });
+//
+// Cold-boot / long-idle hardening:
+// - Storage is persisted write-through on every save() call (no 200ms debounce
+//   for the write itself). The debounce only delays the resync nudge. A popup
+//   torn down on pagehide/blur therefore loses at most milliseconds of typing,
+//   not the whole debounce window.
+// - Every nudge is followed by an alarm backstop. If the message port dies with
+//   the popup (close-mid-sync) or the worker is killed mid-sync, the one-shot
+//   `headerforge:retry` alarm still wakes the worker. Redundant alarms are
+//   harmless: the worker clears them on success.
+// - flush() pre-arms the alarm *synchronously* before any await, so even a
+//   teardown that abandons the awaits still leaves a wake-up behind.
+const RETRY_ALARM_NAME = "headerforge:retry";
+
+let syncPendingCount = 0;
+function setSyncPending(on) {
+  syncPendingCount += on ? 1 : -1;
+  if (syncPendingCount < 0) syncPendingCount = 0;
+  const hint = document.querySelector(".footer__hint");
+  if (hint) {
+    if (syncPendingCount > 0) {
+      if (!hint.dataset.baseText) hint.dataset.baseText = hint.textContent;
+      hint.textContent = "Applying…";
+      hint.setAttribute("aria-busy", "true");
+    } else {
+      if (hint.dataset.baseText) hint.textContent = hint.dataset.baseText;
+      hint.removeAttribute("aria-busy");
+    }
+  }
+}
+
+function preArmWorkerWake() {
+  try {
+    const r = chrome.alarms?.create?.(RETRY_ALARM_NAME, {
+      delayInMinutes: 1,
+    });
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch {
+    /* alarms unavailable; message nudge is still attempted */
+  }
+}
+
+// Serialized storage writes so blur+pagehide double-flush cannot interleave.
+let storageChain = Promise.resolve();
+function persistState() {
+  const snapshot = state;
+  storageChain = storageChain
+    .then(() => chrome.storage.local.set({ [STORAGE_KEY]: snapshot }))
+    .catch(() => {});
+  return storageChain;
+}
+
+async function nudgeWorker() {
+  setSyncPending(true);
   try {
     await chrome.runtime.sendMessage({ type: "resync" });
   } catch {
-    // No receiver (worker still starting, or the popup closed first). The
-    // storage write is already durable and the worker syncs on spin-up.
+    // No receiver, port closed with the popup, or worker still starting.
+    // Storage is already durable; leave an alarm so a dormant worker wakes
+    // even if storage.onChanged was dropped.
+    preArmWorkerWake();
+  } finally {
+    setSyncPending(false);
   }
+}
+
+async function commit() {
+  await persistState();
+  await nudgeWorker();
 }
 
 function save({ immediate = false } = {}) {
@@ -165,16 +226,19 @@ function save({ immediate = false } = {}) {
   // enable/disable, a header being toggled off, a name being typed into or out
   // of validity. Cheap — it renders a handful of nodes off an O(headers) scan.
   renderPrecedence();
+  // Write-through: start the durable write now, not after the debounce. The
+  // debounce below only delays the worker nudge (which re-reads latest).
+  void persistState();
   clearTimeout(saveTimer);
   // Must be nulled, not just cleared: clearTimeout leaves the variable holding
   // an expired-but-truthy timer id, and the storage listener below treats a
   // truthy saveTimer as "an edit is in flight". Leaving it set meant the popup
   // stopped adopting external changes after the very first debounced save.
   saveTimer = null;
-  if (immediate) return commit();
+  if (immediate) return nudgeWorker();
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    commit();
+    void nudgeWorker();
   }, 200);
   return Promise.resolve();
 }
@@ -182,7 +246,31 @@ function save({ immediate = false } = {}) {
 async function flush() {
   clearTimeout(saveTimer);
   saveTimer = null;
-  await commit();
+  // Synchronous pre-arm: survives even if the awaits below are abandoned by
+  // document teardown. The worker clears it on success.
+  preArmWorkerWake();
+  try {
+    await persistState();
+  } catch {
+    /* storage write is best-effort during teardown */
+  }
+  try {
+    await nudgeWorker();
+  } catch {
+    /* backstop alarm above covers us */
+  }
+}
+
+// Key-order-stable compare for the storage echo check below. Plain
+// JSON.stringify depends on insertion order, so logically-identical states
+// with different key order compared unequal and caused needless re-renders
+// (and, worse, occasionally skipped adoption when they compared equal but
+// were not).
+function stableStringify(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(v).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(",")}}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,12 +1337,14 @@ function wire() {
     }
     // The About & settings tab may have changed the shared state. Adopt it
     // rather than writing our own snapshot back over it on the next save.
-    // Skipped while an edit is still queued, so an in-progress keystroke is
-    // never yanked out from under the user.
+    // Skipped while a resync nudge is still debounced, so an in-progress
+    // keystroke is never yanked out from under the user. Note storage itself
+    // is already persisted write-through, so the window here is only the
+    // 200ms nudge debounce, not unsaved data.
     if (changes[STORAGE_KEY] && !saveTimer) {
       const incoming = normalizeState(migrate(changes[STORAGE_KEY].newValue));
       // Our own writes echo back here; ignore those.
-      if (JSON.stringify(incoming) === JSON.stringify(state)) return;
+      if (stableStringify(incoming) === stableStringify(state)) return;
       state = incoming;
       applyTheme();
       applySize();
@@ -1265,8 +1355,20 @@ function wire() {
 
   wireResize();
 
-  window.addEventListener("pagehide", flush);
-  window.addEventListener("blur", () => save({ immediate: true }));
+  // pagehide: best-effort durable flush. Started synchronously (pre-armed
+  // alarm + storage write) so a teardown that abandons the awaits still
+  // leaves a worker wake-up behind. Do not await here; the document is going
+  // away. Only flush when something is still unsynced, otherwise every popup
+  // close would leave a redundant alarm behind (the worker only clears alarms
+  // it scheduled itself).
+  window.addEventListener("pagehide", () => {
+    if (saveTimer || syncPendingCount > 0) void flush();
+  });
+  // blur: only flush when a debounced nudge is still pending. Flushing on
+  // every blur hammered storage + DNR on each focus loss even with no edits.
+  window.addEventListener("blur", () => {
+    if (saveTimer) void flush();
+  });
 }
 
 // ---------------------------------------------------------------------------

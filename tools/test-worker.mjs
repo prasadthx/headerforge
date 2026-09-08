@@ -495,6 +495,139 @@ await test("a theme change still repaints the icon", async () => {
   ]);
 });
 
-const EXPECTED = 15;
+await test("a late stale DNR write is repaired to fresh state", async () => {
+  // The timeout abandons the promise but cannot cancel the chrome call: a
+  // stalled updateDynamicRules with old state can land *after* a newer sync
+  // applied fresh state. The stale exit must queue a repair so latest wins
+  // last (cold boot / slow engine makes this overlap likely).
+  const env = makeEnv({ paused: false });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realUpdate = dnr.updateDynamicRules;
+  let release = null;
+  let entered = false;
+  let stallOnce = true;
+  dnr.updateDynamicRules = async (args) => {
+    if (stallOnce) {
+      stallOnce = false;
+      entered = true;
+      await new Promise((r) => { release = r; });
+    }
+    return realUpdate.call(dnr, args);
+  };
+
+  await quiet(async () => {
+    await boot(env); // sync A stalls inside its DNR write with old headers
+    await waitFor(() => entered, { label: "sync A to enter its write" });
+    // User edits while A is stalled: swap to a distinct header name so old vs
+    // fresh are distinguishable via appliedHeaders().
+    const cur = env.store["headerforge:v1"];
+    env.store["headerforge:v1"] = {
+      ...cur,
+      profiles: [
+        {
+          ...cur.profiles[0],
+          requestHeaders: [
+            { id: "h9", enabled: true, name: "X-Fresh", value: "new", operation: "set", description: "" },
+          ],
+        },
+      ],
+    };
+    await syncViaMessage(); // sync B applies X-Fresh
+    await waitFor(() => env.appliedHeaders().includes("X-Fresh"), {
+      label: "fresh sync to apply",
+    }).catch(() => {});
+    release(); // A's stale write (Authorization/X-Tenant) lands after B
+    await waitFor(() => env.appliedHeaders().includes("X-Fresh") && env.appliedHeaders().length === 1, {
+      label: "repair to re-apply fresh",
+    }).catch(() => {});
+    await idle(200);
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders(),
+    ["X-Fresh"],
+    "stale write must be repaired so fresh wins last",
+  );
+});
+
+await test("the alarm handler holds the worker alive and pre-arms", async () => {
+  // Fire-and-forget alarm handling let Chrome reclaim the worker mid-retry;
+  // pre-arming before the sync guarantees a teardown still leaves a backstop.
+  // Without the pre-arm the alarm only appears after the 15s timeout fails;
+  // with it the alarm is present synchronously, before the hung call settles.
+  const env = makeEnv({ paused: true });
+  await quiet(async () => {
+    await boot(env);
+    await idle(80);
+  });
+  // Boot success clears the boot pre-arm, so start from a clean slate.
+  // (clear is async in the stub but completes within the idle above.)
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  let release = null;
+  let stallOnce = true;
+  dnr.getDynamicRules = async () => {
+    if (stallOnce) {
+      stallOnce = false;
+      await new Promise((r) => { release = r; });
+    }
+    return realGet.call(dnr);
+  };
+  let alarmReturn;
+  await quiet(async () => {
+    alarmReturn = env.fireAlarm("headerforge:retry");
+    // Synchronous check: pre-arm must have run before the stalled call.
+    assert.ok(
+      env.alarms().includes("headerforge:retry"),
+      "pre-armed alarm must be present before the hung sync settles",
+    );
+    // Handler must return a promise so Chrome keeps the worker alive.
+    assert.ok(
+      alarmReturn && typeof alarmReturn.then === "function",
+      "alarm handler must return its sync promise",
+    );
+    await waitFor(() => release !== null, { label: "alarm sync to stall" });
+    release();
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "alarm-driven paused sync to finish",
+    }).catch(() => {});
+  });
+  assert.deepEqual(env.appliedHeaders(), []);
+});
+
+await test("a transient regex failure is not pinned as invalid", async () => {
+  // Only successful validations are cached. Caching "false" would pin a
+  // cold-boot engine hiccup as "invalid pattern" until restart.
+  const env = makeEnv({ paused: false });
+  env.store["headerforge:v1"] = {
+    ...env.store["headerforge:v1"],
+    profiles: [
+      {
+        ...env.store["headerforge:v1"].profiles[0],
+        urlFilters: [{ id: "f1", enabled: true, pattern: "a\\.com" }],
+      },
+    ],
+  };
+  let calls = 0;
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realIsRegex = dnr.isRegexSupported;
+  dnr.isRegexSupported = async () => {
+    if (++calls === 1) throw new Error("engine busy on cold boot");
+    return realIsRegex ? realIsRegex.call(dnr) : { isSupported: true };
+  };
+  await quiet(async () => {
+    await boot(env);
+    await idle(120);
+    await syncViaMessage();
+    await idle(120);
+  });
+  const rules = await globalThis.chrome.declarativeNetRequest.getDynamicRules();
+  assert.ok(
+    rules.length > 0 && rules[0].condition && rules[0].condition.regexFilter === "a\\.com",
+    "second validation must succeed and produce a filtered rule, not a pinned invalid",
+  );
+});
+
+const EXPECTED = 18;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
