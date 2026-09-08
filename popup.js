@@ -14,6 +14,7 @@ import {
   uniqueProfileName,
   ICON_PATHS,
   RESOLVED_THEME_KEY,
+  RETRY_ALARM,
 } from "./state.js";
 import { precedenceOrder } from "./rules.js";
 
@@ -152,16 +153,17 @@ function currentProfile() {
 //
 // Cold-boot / long-idle hardening:
 // - Storage is persisted write-through on every save() call (no 200ms debounce
-//   for the write itself). The debounce only delays the resync nudge. A popup
-//   torn down on pagehide/blur therefore loses at most milliseconds of typing,
-//   not the whole debounce window.
-// - Every nudge is followed by an alarm backstop. If the message port dies with
-//   the popup (close-mid-sync) or the worker is killed mid-sync, the one-shot
-//   `headerforge:retry` alarm still wakes the worker. Redundant alarms are
-//   harmless: the worker clears them on success.
+//   for the write itself), so a torn-down popup loses at most milliseconds of
+//   typing. Rule churn is contained worker-side: background debounces
+//   storage.onChanged, so a typing burst collapses to one DNR rewrite while
+//   the debounced resync nudge below stays the reliable dormant wake-up.
+// - A lost nudge leaves an alarm backstop. If the message port dies with the
+//   popup or the worker is killed mid-sync, the one-shot RETRY_ALARM still
+//   wakes the worker. Redundant alarms are harmless: the worker clears them
+//   on success.
 // - flush() pre-arms the alarm *synchronously* before any await, so even a
 //   teardown that abandons the awaits still leaves a wake-up behind.
-const RETRY_ALARM_NAME = "headerforge:retry";
+// RETRY_ALARM is shared via state.js so all three files agree.
 
 let syncPendingCount = 0;
 function setSyncPending(on) {
@@ -182,7 +184,7 @@ function setSyncPending(on) {
 
 function preArmWorkerWake() {
   try {
-    const r = chrome.alarms?.create?.(RETRY_ALARM_NAME, {
+    const r = chrome.alarms?.create?.(RETRY_ALARM, {
       delayInMinutes: 1,
     });
     if (r && typeof r.catch === "function") r.catch(() => {});
@@ -259,18 +261,6 @@ async function flush() {
   } catch {
     /* backstop alarm above covers us */
   }
-}
-
-// Key-order-stable compare for the storage echo check below. Plain
-// JSON.stringify depends on insertion order, so logically-identical states
-// with different key order compared unequal and caused needless re-renders
-// (and, worse, occasionally skipped adoption when they compared equal but
-// were not).
-function stableStringify(v) {
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(v).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(v[k])}`).join(",")}}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1343,8 +1333,9 @@ function wire() {
     // 200ms nudge debounce, not unsaved data.
     if (changes[STORAGE_KEY] && !saveTimer) {
       const incoming = normalizeState(migrate(changes[STORAGE_KEY].newValue));
-      // Our own writes echo back here; ignore those.
-      if (stableStringify(incoming) === stableStringify(state)) return;
+      // Our own writes echo back here; ignore those. Both sides come from
+      // normalizeState with identical key order, so JSON.stringify is stable.
+      if (JSON.stringify(incoming) === JSON.stringify(state)) return;
       state = incoming;
       applyTheme();
       applySize();

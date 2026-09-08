@@ -13,6 +13,10 @@ export const UPDATE_KEY = "headerforge:updateReady";
 // matchMedia, so the worker cannot work it out itself; the UI records it here so
 // the worker can still pick the right icon on a cold start.
 export const RESOLVED_THEME_KEY = "headerforge:resolvedTheme";
+// One-shot alarm that survives service-worker teardown and wakes the worker
+// for a retry. Shared by background/popup/options so a rename cannot silently
+// break the backstop (all three must agree).
+export const RETRY_ALARM = "headerforge:retry";
 
 // Bump when the persisted shape changes, and add a matching step in migrate().
 export const SCHEMA_VERSION = 2;

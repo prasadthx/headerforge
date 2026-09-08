@@ -8,6 +8,7 @@ import {
   uniqueProfileName,
   ICON_PATHS,
   RESOLVED_THEME_KEY,
+  RETRY_ALARM,
 } from "./state.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
@@ -78,7 +79,7 @@ async function save(mutate) {
     // leave a one-shot alarm so a dormant worker still wakes even though the
     // event was dropped. Harmless if the worker already synced on spin-up.
     try {
-      await chrome.alarms?.create?.("headerforge:retry", {
+      await chrome.alarms?.create?.(RETRY_ALARM, {
         delayInMinutes: 1,
       });
     } catch {

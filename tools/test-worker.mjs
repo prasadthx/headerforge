@@ -58,7 +58,9 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
   let badge = "2";
   const alarms = new Set();
   let onAlarm = null;
+  let onStorageChanged = null;
   const iconPaths = [];
+  let updateCalls = 0;
 
   globalThis.chrome = {
     storage: {
@@ -78,7 +80,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
         },
         async remove(k) { delete store[k]; },
       },
-      onChanged: { addListener() {} },
+      onChanged: { addListener(f) { onStorageChanged = f; } },
     },
     runtime: {
       onInstalled: { addListener() {} },
@@ -106,6 +108,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
         return dynamicRules;
       },
       async updateDynamicRules({ removeRuleIds = [], addRules = [] }) {
+        updateCalls++;
         dynamicRules = dynamicRules.filter((r) => !removeRuleIds.includes(r.id));
         dynamicRules.push(...addRules);
       },
@@ -125,6 +128,10 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
     // Stand in for Chrome firing an alarm after the worker that scheduled the
     // setTimeout retries has been torn down.
     fireAlarm: (name) => onAlarm && onAlarm({ name }),
+    fireStorageChange: () =>
+      onStorageChanged &&
+      onStorageChanged({ "headerforge:v1": {} }, "local"),
+    updateCalls: () => updateCalls,
     iconCalls: () => iconPaths.length,
     iconPaths: () => [...iconPaths],
   };
@@ -551,8 +558,10 @@ await test("a late stale DNR write is repaired to fresh state", async () => {
 });
 
 await test("the alarm handler holds the worker alive and pre-arms", async () => {
-  // Fire-and-forget alarm handling let Chrome reclaim the worker mid-retry;
-  // pre-arming before the sync guarantees a teardown still leaves a backstop.
+  // The pre-armed follow-up is the real protection: it survives a teardown
+  // mid-sync and wakes us again. (Returning the promise is not a documented
+  // alarms lifetime signal the way returning true is for onMessage; it is
+  // kept so tests can observe completion, not because Chrome consumes it.)
   // Without the pre-arm the alarm only appears after the 15s timeout fails;
   // with it the alarm is present synchronously, before the hung call settles.
   const env = makeEnv({ paused: true });
@@ -628,6 +637,41 @@ await test("a transient regex failure is not pinned as invalid", async () => {
   );
 });
 
-const EXPECTED = 18;
+await test("an absent state key syncs once instead of looping on repair", async () => {
+  // Regression for the pre-write freshness check: comparing two independently
+  // normalized states is not a fixed point when nothing is stored (fresh UUIDs
+  // each call), so the repair it triggers looped forever with zero DNR writes.
+  // Raw-to-raw comparison terminates: one sync, one write.
+  const env = makeEnv({ paused: false });
+  delete env.store["headerforge:v1"]; // fresh install before onInstalled seeds
+  await quiet(async () => {
+    await boot(env);
+    await waitFor(() => env.updateCalls() >= 1, { label: "boot sync to write" });
+    await idle(150);
+  });
+  assert.equal(env.updateCalls(), 1, "absent state must produce exactly one DNR write");
+  assert.deepEqual(env.appliedHeaders(), [], "default state applies no headers");
+});
+
+await test("rapid storage writes collapse to one DNR rewrite", async () => {
+  // Popup persists write-through per keystroke for durability; the worker
+  // debounces storage.onChanged so a 10-character burst does not become 10
+  // full remove-all/add-all rewrites. The debounced resync nudge stays the
+  // dormant wake-up (storage events are dropped while dormant).
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.appliedHeaders().length === 2, { label: "boot to apply" });
+  await idle(80); // let the boot debounce window fully settle
+  const before = env.updateCalls();
+  for (let i = 0; i < 10; i++) env.fireStorageChange();
+  await waitFor(() => env.updateCalls() >= before + 1, { label: "debounced sync" });
+  await idle(150);
+  assert.equal(
+    env.updateCalls() - before,
+    1,
+    "10 rapid storage events must collapse to one DNR rewrite",
+  );
+});
+
+const EXPECTED = 20;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);
