@@ -194,11 +194,13 @@ function preArmWorkerWake() {
 }
 
 // Serialized storage writes so blur+pagehide double-flush cannot interleave.
+// Reads the live `state` reference at write time (not a point-in-time copy):
+// the popup mutates `state` in place, so coalesced writes are last-write-wins
+// with the latest data.
 let storageChain = Promise.resolve();
 function persistState() {
-  const snapshot = state;
   storageChain = storageChain
-    .then(() => chrome.storage.local.set({ [STORAGE_KEY]: snapshot }))
+    .then(() => chrome.storage.local.set({ [STORAGE_KEY]: state }))
     .catch(() => {});
   return storageChain;
 }
