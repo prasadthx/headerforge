@@ -17,11 +17,21 @@ async function test(name, fn) {
 const BG = new URL("../background.js", import.meta.url).href;
 let bust = 0;
 
-// background.js races doSyncRules against a 15s timer. Compress every timer so
-// that path is exercisable in a test without waiting on wall clock.
+// background.js races doSyncRules against a 15s timer. Compress timers so that
+// path is exercisable in a test without waiting on wall clock — except the
+// 250ms storage debounce, which the burst-coalescing test below pins at a
+// realistic typing cadence. Compressing it to 30ms would let the test pass
+// under any debounce >= 1ms and hide a churn regression.
 const realSetTimeout = globalThis.setTimeout;
+const STORAGE_DEBOUNCE_MS_FOR_TEST = 250;
 globalThis.setTimeout = (fn, ms, ...rest) =>
-  realSetTimeout(fn, Math.min(typeof ms === "number" ? ms : 0, 30), ...rest);
+  realSetTimeout(
+    fn,
+    ms === STORAGE_DEBOUNCE_MS_FOR_TEST
+      ? ms
+      : Math.min(typeof ms === "number" ? ms : 0, 30),
+    ...rest,
+  );
 
 // Build a worker environment. `hooks` lets a test make a specific chrome call
 // fail, which is how the real bug manifested.
@@ -655,20 +665,30 @@ await test("an absent state key syncs once instead of looping on repair", async 
 
 await test("rapid storage writes collapse to one DNR rewrite", async () => {
   // Popup persists write-through per keystroke for durability; the worker
-  // debounces storage.onChanged so a 10-character burst does not become 10
-  // full remove-all/add-all rewrites. The debounced resync nudge stays the
-  // dormant wake-up (storage events are dropped while dormant).
+  // debounces storage.onChanged so a typing burst does not become one full
+  // remove-all/add-all rewrite per character. Events are spaced at a realistic
+  // typing cadence (real timers, not the compressed ones) so the test pins the
+  // 250ms debounce value: dropping it to ~10ms would stop coalescing here and
+  // fail. The debounced resync nudge stays the dormant wake-up (storage events
+  // are dropped while dormant).
   const env = await boot(makeEnv({ paused: false }));
   await waitFor(() => env.appliedHeaders().length === 2, { label: "boot to apply" });
   await idle(80); // let the boot debounce window fully settle
   const before = env.updateCalls();
-  for (let i = 0; i < 10; i++) env.fireStorageChange();
+  for (let i = 0; i < 10; i++) {
+    env.fireStorageChange();
+    await new Promise((r) => realSetTimeout(r, 20));
+  }
+  // Popup's debounced resync nudge arrives just after the burst; without the
+  // message path cancelling the pending storage debounce this tail repeats the
+  // same rewrite (10 chars -> 2 rewrites instead of 1).
+  await syncViaMessage();
   await waitFor(() => env.updateCalls() >= before + 1, { label: "debounced sync" });
-  await idle(150);
+  await new Promise((r) => realSetTimeout(r, 500));
   assert.equal(
     env.updateCalls() - before,
     1,
-    "10 rapid storage events must collapse to one DNR rewrite",
+    "burst plus its resync nudge must collapse to one DNR rewrite",
   );
 });
 

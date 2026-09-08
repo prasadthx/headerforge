@@ -35,26 +35,14 @@ async function loadState() {
   };
 }
 
-// Validate a user-supplied regex against the declarativeNetRequest engine (RE2).
-async function isRegexOk(pattern) {
-  try {
-    const res = await chrome.declarativeNetRequest.isRegexSupported({
-      regex: pattern,
-    });
-    return res.isSupported;
-  } catch {
-    return false;
-  }
-}
-
 // Cache of regex -> engine verdict for this worker lifetime. Unchanged valid
 // patterns must not cost an IPC round-trip on every sync: each round-trip
 // widens the window in which the worker can be torn down mid-sync and in
 // which a user navigation races the rule update.
 // Positives are cached for the worker lifetime (an accepted pattern stays
-// accepted). Negatives get a short TTL so typing an invalid regex still
-// collapses a burst into few round-trips, while a transient cold-boot engine
-// hiccup is retried soon instead of pinned as "invalid" until restart.
+// accepted). Explicit invalid verdicts get a short TTL to collapse a typing
+// burst; thrown engine hiccups (cold-boot busy) are never cached and are
+// retried on the next sync.
 const regexPosCache = new Map();
 const regexNegCache = new Map(); // pattern -> timestamp ms
 const REGEX_CACHE_LIMIT = 500;
@@ -67,28 +55,24 @@ async function isRegexOkCached(pattern) {
     return false;
   }
   if (negAt !== undefined) regexNegCache.delete(pattern);
-  // Call the engine directly (not via isRegexOk) so a thrown engine hiccup
-  // (cold-boot busy) is *not* cached as an invalid pattern — it returns false
-  // for this sync only and is retried on the next one. Only an explicit
-  // isSupported:false verdict earns a short negative TTL.
-  let ok;
+  let supported;
   try {
     const res = await chrome.declarativeNetRequest.isRegexSupported({
       regex: pattern,
     });
-    ok = res.isSupported;
+    supported = res && res.isSupported === true;
   } catch {
     return false;
   }
-  if (ok === true) {
+  if (supported) {
     if (regexPosCache.size >= REGEX_CACHE_LIMIT) regexPosCache.clear();
     regexPosCache.set(pattern, true);
     regexNegCache.delete(pattern);
-  } else {
-    if (regexNegCache.size >= REGEX_CACHE_LIMIT) regexNegCache.clear();
-    regexNegCache.set(pattern, Date.now());
+    return true;
   }
-  return ok;
+  if (regexNegCache.size >= REGEX_CACHE_LIMIT) regexNegCache.clear();
+  regexNegCache.set(pattern, Date.now());
+  return false;
 }
 
 // Validate every enabled URL pattern, grouped by profile. Invalid patterns are
@@ -310,18 +294,12 @@ const MAX_SYNC_RETRIES = 3;
 //
 // Chrome clamps alarm delays to ~30s in release builds, so this stays strictly
 // a backstop: the setTimeout retries above it are what recover quickly.
-// RETRY_ALARM is imported from state.js so background/popup/options agree.
-// Whether this worker scheduled the backstop, so the common success path can
-// skip a redundant clear. A teardown resets this while leaving the alarm in
-// place, and the popup also pre-arms the same alarm on close-mid-edit — both
-// cases cost one redundant sync when the alarm fires, which is harmless and
-// self-limiting because the alarm is one-shot. Success still attempts a clear
-// unconditionally (cheap no-op when absent) so a popup-pre-armed alarm does
-// not linger after the message-path sync already succeeded.
-let durableRetryPending = false;
 
+// RETRY_ALARM is shared via state.js so background/popup/options agree. A
+// teardown (or a popup pre-arm on close-mid-edit) can leave it armed with no
+// in-memory record; firing it is a harmless self-limiting redundant sync, and
+// success clears it unconditionally (cheap no-op when absent).
 function scheduleDurableRetry() {
-  durableRetryPending = true;
   try {
     const r = chrome.alarms.create(RETRY_ALARM, { delayInMinutes: 1 });
     if (r && typeof r.catch === "function") r.catch(() => {});
@@ -331,7 +309,6 @@ function scheduleDurableRetry() {
 }
 
 function clearDurableRetry() {
-  durableRetryPending = false;
   try {
     const r = chrome.alarms.clear(RETRY_ALARM);
     if (r && typeof r.catch === "function") r.catch(() => {});
@@ -584,12 +561,9 @@ async function doSyncRules() {
     staleExit();
     return;
   }
-  let rawAfter;
   try {
-    rawAfter = freshCheck[STORAGE_KEY];
-    const beforeJson = rawBefore === undefined ? undefined : JSON.stringify(rawBefore);
-    const afterJson = rawAfter === undefined ? undefined : JSON.stringify(rawAfter);
-    if (beforeJson !== afterJson) {
+    const rawAfter = freshCheck[STORAGE_KEY];
+    if (JSON.stringify(rawBefore) !== JSON.stringify(rawAfter)) {
       // State moved under us — do not write stale groups. A newer sync is
       // already queued (storage.onChanged + resync nudge both fire), but if it
       // was dropped while dormant, this repair guarantees latest wins.
@@ -654,7 +628,6 @@ chrome.runtime.onStartup.addListener(() => syncRules());
 // the idle timer. The return is kept so tests can observe completion.)
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === RETRY_ALARM) {
-    durableRetryPending = false;
     // Pre-arm before doing work: if we are killed below, this survives us.
     // One-shot with the same name overwrites, so at most one is ever pending.
     scheduleDurableRetry();
@@ -675,6 +648,14 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
 // events so a typing burst collapses to one sync; the explicit resync message
 // below stays immediate because it is already debounced sender-side and is the
 // reliable wake-up when dormant (storage events are dropped while dormant).
+//
+// Lifetime tradeoff, stated plainly: this debounce depends on setTimeout, and
+// setTimeout neither keeps the worker alive nor survives its teardown — the
+// exact hazard the RETRY_ALARM comment above warns about. That is acceptable
+// here because the storage event itself just reset the 30s idle timer (so a
+// reclaim inside this 250ms window is unlikely), and both writers (popup,
+// options) also send the immediate resync message below with the alarm behind
+// it. At worst a dropped debounce delays the sync until that message/alarm.
 let storageDebounceTimer;
 const STORAGE_DEBOUNCE_MS = 250;
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -698,6 +679,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // port can stay open.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "resync") {
+    // The debounced storage event above would otherwise fire ~50ms later and
+    // repeat this same remove-all/add-all rewrite. Cancel it: this message
+    // already carries the latest state.
+    clearTimeout(storageDebounceTimer);
+    storageDebounceTimer = undefined;
     syncRules().then(
       () => {
         try {
