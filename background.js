@@ -9,6 +9,8 @@ import {
   ERROR_KEY,
   UPDATE_KEY,
   RESOLVED_THEME_KEY,
+  RETRY_ALARM,
+  STORAGE_DEBOUNCE_MS,
   ICON_PATHS,
   normalizeState,
   createDefaultState,
@@ -23,19 +25,55 @@ let resolvedThemeHint = "light";
 async function loadState() {
   const stored = await chrome.storage.local.get([STORAGE_KEY, RESOLVED_THEME_KEY]);
   resolvedThemeHint = stored[RESOLVED_THEME_KEY] === "dark" ? "dark" : "light";
-  return normalizeState(migrate(stored[STORAGE_KEY]));
+  // Return the raw blob alongside the normalized state so the pre-write
+  // freshness check can compare raw-to-raw. Comparing two independently
+  // normalized states is not a fixed point when ids are missing (or nothing
+  // is stored): normalizeState mints fresh UUIDs each call, so the comparison
+  // could never succeed and the repair it triggers would loop forever.
+  return {
+    state: normalizeState(migrate(stored[STORAGE_KEY])),
+    raw: stored[STORAGE_KEY],
+  };
 }
 
-// Validate a user-supplied regex against the declarativeNetRequest engine (RE2).
-async function isRegexOk(pattern) {
+// Cache of regex -> engine verdict for this worker lifetime. Unchanged valid
+// patterns must not cost an IPC round-trip on every sync: each round-trip
+// widens the window in which the worker can be torn down mid-sync and in
+// which a user navigation races the rule update.
+// Positives are cached for the worker lifetime (an accepted pattern stays
+// accepted). Explicit invalid verdicts get a short TTL to collapse a typing
+// burst; thrown engine hiccups (cold-boot busy) are never cached and are
+// retried on the next sync.
+const regexPosCache = new Map();
+const regexNegCache = new Map(); // pattern -> timestamp ms
+const REGEX_CACHE_LIMIT = 500;
+const REGEX_NEG_TTL_MS = 3000;
+
+async function isRegexOkCached(pattern) {
+  if (regexPosCache.has(pattern)) return true;
+  const negAt = regexNegCache.get(pattern);
+  if (negAt !== undefined && Date.now() - negAt < REGEX_NEG_TTL_MS) {
+    return false;
+  }
+  if (negAt !== undefined) regexNegCache.delete(pattern);
+  let supported;
   try {
     const res = await chrome.declarativeNetRequest.isRegexSupported({
       regex: pattern,
     });
-    return res.isSupported;
+    supported = res && res.isSupported === true;
   } catch {
     return false;
   }
+  if (supported) {
+    if (regexPosCache.size >= REGEX_CACHE_LIMIT) regexPosCache.clear();
+    regexPosCache.set(pattern, true);
+    regexNegCache.delete(pattern);
+    return true;
+  }
+  if (regexNegCache.size >= REGEX_CACHE_LIMIT) regexNegCache.clear();
+  regexNegCache.set(pattern, Date.now());
+  return false;
 }
 
 // Validate every enabled URL pattern, grouped by profile. Invalid patterns are
@@ -53,7 +91,7 @@ async function validatePatterns(state) {
       const candidates = profile.urlFilters
         .filter((f) => f.enabled && (f.pattern || "").trim())
         .map((f) => (f.pattern || "").trim());
-      const ok = await Promise.all(candidates.map(isRegexOk));
+      const ok = await Promise.all(candidates.map(isRegexOkCached));
       return { profile, candidates, ok };
     }),
   );
@@ -149,7 +187,12 @@ async function removeAllRules(isCurrent) {
   // sync has already applied rules for a state the user has since resumed.
   // Removing them then switches every header off with nothing left to put them
   // back, because the sync that would have is already finished.
-  if (isCurrent && !isCurrent()) return;
+  if (isCurrent && !isCurrent()) {
+    // The newer sync already finished; our stalled remove must not run, and if
+    // our stalled update already ran it must be repaired (see repairAfterStale).
+    repairAfterStale();
+    return;
+  }
   await chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: existing.map((r) => r.id),
   });
@@ -187,6 +230,29 @@ async function reportSyncFailure(e) {
 let syncing = Promise.resolve();
 let queued = false;
 let consecutiveFailures = 0;
+
+// A stale (superseded or timed-out) sync may already have issued a DNR write
+// with old state: racing withTimeout abandons the promise but cannot cancel
+// the underlying chrome call, so the late write can land after a newer sync
+// and clobber fresh rules. The epoch guard alone cannot undo that write.
+// Queue a fresh sync so the latest state always wins last. Coalesced via the
+// `queued` flag, so redundant calls are free.
+//
+// Also arms the durable backstop: a bail-to-repair returns normally, so the
+// success handler below would otherwise clear the alarm while the repair is
+// still only a worker-resident promise. Marking repairPending tells the
+// success path to preserve (not clear) the alarm; the repair sync clears it
+// when it actually lands.
+let repairPending = false;
+function repairAfterStale() {
+  repairPending = true;
+  scheduleDurableRetry();
+  try {
+    syncRules();
+  } catch {
+    /* scheduling must never throw */
+  }
+}
 
 // Generation guard.
 //
@@ -229,16 +295,13 @@ const MAX_SYNC_RETRIES = 3;
 //
 // Chrome clamps alarm delays to ~30s in release builds, so this stays strictly
 // a backstop: the setTimeout retries above it are what recover quickly.
-const RETRY_ALARM = "headerforge:retry";
 
-// Whether we have a backstop outstanding, so the success path does not spend an
-// API call clearing an alarm that was never set. A worker teardown resets this
-// while leaving the alarm in place; that costs one redundant sync when it
-// fires, which is harmless and self-limiting because the alarm is one-shot.
-let durableRetryPending = false;
-
+// RETRY_ALARM is shared via state.js so background/popup/options agree. A
+// teardown (or a popup pre-arm on close-mid-edit) can leave it armed with no
+// in-memory record; firing it is a harmless self-limiting redundant sync, and
+// success clears it (cheap no-op when absent) unless a repair is queued behind
+// it, which re-arms instead.
 function scheduleDurableRetry() {
-  durableRetryPending = true;
   try {
     const r = chrome.alarms.create(RETRY_ALARM, { delayInMinutes: 1 });
     if (r && typeof r.catch === "function") r.catch(() => {});
@@ -248,8 +311,6 @@ function scheduleDurableRetry() {
 }
 
 function clearDurableRetry() {
-  if (!durableRetryPending) return;
-  durableRetryPending = false;
   try {
     const r = chrome.alarms.clear(RETRY_ALARM);
     if (r && typeof r.catch === "function") r.catch(() => {});
@@ -289,7 +350,16 @@ function syncRules() {
     })
     .then(() => {
       consecutiveFailures = 0;
-      clearDurableRetry();
+      // A bail-to-repair returns normally but the repair is still queued behind
+      // us. Clearing now would delete the backstop the repair depends on if
+      // the worker is reclaimed in between, so preserve it; the repair sync
+      // clears it when it actually lands.
+      if (repairPending) {
+        repairPending = false;
+        scheduleDurableRetry();
+      } else {
+        clearDurableRetry();
+      }
     })
     .catch((e) => {
       queued = false;
@@ -335,10 +405,20 @@ function ruleCap() {
 // used to clear every rule — one bad entry anywhere cost every profile its
 // headers. Retry profile by profile so a rule Chrome dislikes only costs the
 // profile that owns it.
-async function applyRuleGroups(groups, removeRuleIds) {
+async function applyRuleGroups(groups, removeRuleIds, isCurrent) {
   const errors = [];
   const failedProfileIds = new Set();
   const addRules = groups.flatMap((g) => g.rules);
+
+  // Do not issue a stale write when a newer sync has already superseded us.
+  // The in-flight DNR call itself cannot be cancelled once issued, but every
+  // write we have not yet issued can still be skipped (see repairAfterStale).
+  // failedProfileIds is unread on this path (doSyncRules returns early on
+  // abortedStale), so just bail.
+  if (isCurrent && !isCurrent()) {
+    repairAfterStale();
+    return { errors, failedProfileIds, abortedStale: true };
+  }
 
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({
@@ -348,6 +428,11 @@ async function applyRuleGroups(groups, removeRuleIds) {
     return { errors, failedProfileIds };
   } catch (e) {
     console.error("Batch rule update rejected; isolating per profile:", e);
+  }
+
+  if (isCurrent && !isCurrent()) {
+    repairAfterStale();
+    return { errors, failedProfileIds, abortedStale: true };
   }
 
   // Clear once, then contribute whatever each profile can. This has to succeed:
@@ -367,6 +452,11 @@ async function applyRuleGroups(groups, removeRuleIds) {
   }
 
   for (const g of groups) {
+    if (isCurrent && !isCurrent()) {
+      // Stop contributing stale profiles; the repair sync re-applies latest.
+      repairAfterStale();
+      return { errors, failedProfileIds, abortedStale: true };
+    }
     try {
       await chrome.declarativeNetRequest.updateDynamicRules({
         addRules: g.rules,
@@ -386,12 +476,21 @@ async function applyRuleGroups(groups, removeRuleIds) {
 async function doSyncRules() {
   const epoch = ++syncEpoch;
   const current = () => epoch === syncEpoch;
+  const staleExit = () => {
+    repairAfterStale();
+  };
 
-  const state = await loadState();
-  if (!current()) return;
+  const { state, raw: rawBefore } = await loadState();
+  if (!current()) {
+    staleExit();
+    return;
+  }
 
   const painted = await paintAction(state);
-  if (!current()) return;
+  if (!current()) {
+    staleExit();
+    return;
+  }
 
   // Paused is the safety-critical case: getting the rules off matters more than
   // anything else this function does, so go straight there. Skipping regex
@@ -399,13 +498,20 @@ async function doSyncRules() {
   // reading `paused` and acting on it.
   if (state.paused) {
     await removeAllRules(current);
+    if (!current()) {
+      staleExit();
+      return;
+    }
     if (!painted) await paintAction(state);
     await writeErrors([]);
     return;
   }
 
   const { byProfile, errors } = await validatePatterns(state);
-  if (!current()) return;
+  if (!current()) {
+    staleExit();
+    return;
+  }
   const allGroups = compileRuleGroups(state, byProfile, (profile, name, reason) => {
     errors.push({
       profile: profile.name,
@@ -440,13 +546,46 @@ async function doSyncRules() {
   }
 
   const existing = await chrome.declarativeNetRequest.getDynamicRules();
-  if (!current()) return;
+  if (!current()) {
+    staleExit();
+    return;
+  }
+  // Re-read the raw stored blob just before the safety-critical write: if the
+  // user edited during validation/compilation, our compiled groups are already
+  // stale. Aborting here avoids issuing a stale DNR write at all; the queued
+  // newer sync (or the repair we schedule) applies latest instead.
+  // Compare raw-to-raw, not normalized-to-normalized: normalizeState mints
+  // fresh UUIDs when ids are missing (or nothing is stored), so two
+  // independent normalizations can never compare equal and the repair would
+  // loop forever without writing anything.
+  const freshCheck = await chrome.storage.local.get([STORAGE_KEY]);
+  if (!current()) {
+    staleExit();
+    return;
+  }
+  try {
+    const rawAfter = freshCheck[STORAGE_KEY];
+    if (JSON.stringify(rawBefore) !== JSON.stringify(rawAfter)) {
+      // State moved under us — do not write stale groups. A newer sync is
+      // already queued (storage.onChanged + resync nudge both fire), but if it
+      // was dropped while dormant, this repair guarantees latest wins.
+      repairAfterStale();
+      return;
+    }
+  } catch {
+    /* comparison is best-effort; proceed with the write */
+  }
   const removeRuleIds = existing.map((r) => r.id);
-  const { errors: applyErrors, failedProfileIds } = await applyRuleGroups(
-    groups,
-    removeRuleIds,
-  );
-  if (!current()) return;
+  const {
+    errors: applyErrors,
+    failedProfileIds,
+    abortedStale,
+  } = await applyRuleGroups(groups, removeRuleIds, current);
+  if (abortedStale) return;
+  if (!current()) {
+    staleExit();
+    return;
+  }
 
   // The optimistic badge above counted every locally-valid header. If a profile
   // was dropped at the cap or rejected by the engine, its headers are not
@@ -483,11 +622,20 @@ chrome.runtime.onStartup.addListener(() => syncRules());
 
 // A retry that outlived the worker that scheduled it. The sync it was standing
 // in for never ran, so run it now.
+//
+// The pre-armed follow-up below is the real protection: it survives a teardown
+// mid-sync and wakes us again, since navigation alone never wakes the worker.
+// (Returning the promise is not a documented alarms lifetime signal the way
+// returning true is for onMessage; ongoing chrome API activity is what resets
+// the idle timer. The return is kept so tests can observe completion.)
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === RETRY_ALARM) {
-    durableRetryPending = false;
-    syncRules();
+    // Pre-arm before doing work: if we are killed below, this survives us.
+    // One-shot with the same name overwrites, so at most one is ever pending.
+    scheduleDurableRetry();
+    return syncRules();
   }
+  return undefined;
 });
 
 // When Chrome has a newer version staged, record it so the UI can offer a
@@ -496,13 +644,31 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
   chrome.storage.local.set({ [UPDATE_KEY]: details.version || true });
 });
 
-// The popup persists edits to storage; rebuild rules whenever they change.
-// Returning the promise matters: a fire-and-forget call left Chrome unaware that
-// async work was still pending, so the worker's idle timer could expire partway
-// through the sync and strand the badge on a stale count.
-chrome.storage.onChanged.addListener(async (changes, area) => {
+// The popup persists edits to storage write-through (every keystroke), while
+// its resync nudge is debounced. Without coalescing here, 10 typed characters
+// would become 10 full remove-all/add-all DNR rewrites. Debounce storage
+// events so a typing burst collapses to one sync; the explicit resync message
+// below stays immediate because it is already debounced sender-side and is the
+// reliable wake-up when dormant (storage events are dropped while dormant).
+//
+// Lifetime tradeoff, stated plainly: this debounce depends on setTimeout, and
+// setTimeout neither keeps the worker alive nor survives its teardown — the
+// exact hazard the RETRY_ALARM comment above warns about. That is acceptable
+// here because the storage event itself just reset the 30s idle timer (so a
+// reclaim inside this short debounce window is unlikely), and both writers
+// (popup, options) also send the immediate resync message below with the alarm
+// behind it. At worst a dropped debounce delays the sync until that
+// message/alarm.
+let storageDebounceTimer;
+// STORAGE_DEBOUNCE_MS is shared via state.js so the worker and its test track
+// the same property (debounce must outlast typing cadence), not a literal.
+chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[STORAGE_KEY]) {
-    await syncRules();
+    clearTimeout(storageDebounceTimer);
+    storageDebounceTimer = setTimeout(() => {
+      storageDebounceTimer = undefined;
+      void syncRules();
+    }, STORAGE_DEBOUNCE_MS);
   }
 });
 
@@ -517,11 +683,40 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 // port can stay open.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "resync") {
-    syncRules().then(() => sendResponse({ ok: true }));
+    // The debounced storage event above would otherwise fire ~50ms later and
+    // repeat this same remove-all/add-all rewrite. Cancel it: this message
+    // already carries the latest state.
+    clearTimeout(storageDebounceTimer);
+    storageDebounceTimer = undefined;
+    syncRules().then(
+      () => {
+        try {
+          sendResponse({ ok: true });
+        } catch {
+          /* popup already closed; storage write is durable and alarm covers us */
+        }
+      },
+      () => {
+        try {
+          sendResponse({ ok: false });
+        } catch {
+          /* same as above */
+        }
+      },
+    );
     return true; // async response
   }
   return false;
 });
 
 // Rebuild once when the worker spins up.
+//
+// Pre-arm the durable backstop before the first sync: if the worker is torn
+// down mid-boot-sync (cold boot under memory pressure), the in-flight promise
+// is abandoned and its setTimeout retries die with it. Without a pre-armed
+// alarm nothing would ever retry, and navigation does not wake the worker, so
+// stale rules would persist until the user touches the extension again.
+// Success clears the pre-armed alarm; the alarm firing later is a harmless
+// redundant sync.
+scheduleDurableRetry();
 syncRules();

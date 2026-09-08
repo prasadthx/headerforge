@@ -6,6 +6,7 @@
 // dynamic rules persist by design, so anything that stops doSyncRules partway
 // leaves them in force with nothing to take them down.
 import assert from "node:assert/strict";
+import { STORAGE_DEBOUNCE_MS } from "../state.js";
 
 let passed = 0;
 async function test(name, fn) {
@@ -17,11 +18,27 @@ async function test(name, fn) {
 const BG = new URL("../background.js", import.meta.url).href;
 let bust = 0;
 
-// background.js races doSyncRules against a 15s timer. Compress every timer so
-// that path is exercisable in a test without waiting on wall clock.
+// background.js races doSyncRules against a 15s timer. Compress timers so that
+// path is exercisable in a test without waiting on wall clock — except the
+// storage debounce, which the burst-coalescing test below pins at a realistic
+// typing cadence. Compressing it to 30ms would let the test pass under any
+// debounce >= 1ms and hide a churn regression, so the exemption tracks the
+// shared constant (not a literal) and the test asserts the property below.
+// Realistic inter-keystroke cadence the debounce must outlast.
+const BURST_SPACING_MS = 120;
+assert.ok(
+  STORAGE_DEBOUNCE_MS > BURST_SPACING_MS,
+  `STORAGE_DEBOUNCE_MS (${STORAGE_DEBOUNCE_MS}) must outlast typing cadence (${BURST_SPACING_MS})`,
+);
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...rest) =>
-  realSetTimeout(fn, Math.min(typeof ms === "number" ? ms : 0, 30), ...rest);
+  realSetTimeout(
+    fn,
+    ms === STORAGE_DEBOUNCE_MS
+      ? ms
+      : Math.min(typeof ms === "number" ? ms : 0, 30),
+    ...rest,
+  );
 
 // Build a worker environment. `hooks` lets a test make a specific chrome call
 // fail, which is how the real bug manifested.
@@ -58,7 +75,9 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
   let badge = "2";
   const alarms = new Set();
   let onAlarm = null;
+  let onStorageChanged = null;
   const iconPaths = [];
+  let updateCalls = 0;
 
   globalThis.chrome = {
     storage: {
@@ -78,7 +97,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
         },
         async remove(k) { delete store[k]; },
       },
-      onChanged: { addListener() {} },
+      onChanged: { addListener(f) { onStorageChanged = f; } },
     },
     runtime: {
       onInstalled: { addListener() {} },
@@ -106,6 +125,7 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
         return dynamicRules;
       },
       async updateDynamicRules({ removeRuleIds = [], addRules = [] }) {
+        updateCalls++;
         dynamicRules = dynamicRules.filter((r) => !removeRuleIds.includes(r.id));
         dynamicRules.push(...addRules);
       },
@@ -125,6 +145,10 @@ function makeEnv({ paused = false, headersEnabled = true, hooks = {} } = {}) {
     // Stand in for Chrome firing an alarm after the worker that scheduled the
     // setTimeout retries has been torn down.
     fireAlarm: (name) => onAlarm && onAlarm({ name }),
+    fireStorageChange: () =>
+      onStorageChanged &&
+      onStorageChanged({ "headerforge:v1": {} }, "local"),
+    updateCalls: () => updateCalls,
     iconCalls: () => iconPaths.length,
     iconPaths: () => [...iconPaths],
   };
@@ -495,6 +519,186 @@ await test("a theme change still repaints the icon", async () => {
   ]);
 });
 
-const EXPECTED = 15;
+await test("a late stale DNR write is repaired to fresh state", async () => {
+  // The timeout abandons the promise but cannot cancel the chrome call: a
+  // stalled updateDynamicRules with old state can land *after* a newer sync
+  // applied fresh state. The stale exit must queue a repair so latest wins
+  // last (cold boot / slow engine makes this overlap likely).
+  const env = makeEnv({ paused: false });
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realUpdate = dnr.updateDynamicRules;
+  let release = null;
+  let entered = false;
+  let stallOnce = true;
+  dnr.updateDynamicRules = async (args) => {
+    if (stallOnce) {
+      stallOnce = false;
+      entered = true;
+      await new Promise((r) => { release = r; });
+    }
+    return realUpdate.call(dnr, args);
+  };
+
+  await quiet(async () => {
+    await boot(env); // sync A stalls inside its DNR write with old headers
+    await waitFor(() => entered, { label: "sync A to enter its write" });
+    // User edits while A is stalled: swap to a distinct header name so old vs
+    // fresh are distinguishable via appliedHeaders().
+    const cur = env.store["headerforge:v1"];
+    env.store["headerforge:v1"] = {
+      ...cur,
+      profiles: [
+        {
+          ...cur.profiles[0],
+          requestHeaders: [
+            { id: "h9", enabled: true, name: "X-Fresh", value: "new", operation: "set", description: "" },
+          ],
+        },
+      ],
+    };
+    await syncViaMessage(); // sync B applies X-Fresh
+    await waitFor(() => env.appliedHeaders().includes("X-Fresh"), {
+      label: "fresh sync to apply",
+    }).catch(() => {});
+    release(); // A's stale write (Authorization/X-Tenant) lands after B
+    await waitFor(() => env.appliedHeaders().includes("X-Fresh") && env.appliedHeaders().length === 1, {
+      label: "repair to re-apply fresh",
+    }).catch(() => {});
+    await idle(200);
+  });
+
+  assert.deepEqual(
+    env.appliedHeaders(),
+    ["X-Fresh"],
+    "stale write must be repaired so fresh wins last",
+  );
+});
+
+await test("the alarm handler holds the worker alive and pre-arms", async () => {
+  // The pre-armed follow-up is the real protection: it survives a teardown
+  // mid-sync and wakes us again. (Returning the promise is not a documented
+  // alarms lifetime signal the way returning true is for onMessage; it is
+  // kept so tests can observe completion, not because Chrome consumes it.)
+  // Without the pre-arm the alarm only appears after the 15s timeout fails;
+  // with it the alarm is present synchronously, before the hung call settles.
+  const env = makeEnv({ paused: true });
+  await quiet(async () => {
+    await boot(env);
+    await idle(80);
+  });
+  // Boot success clears the boot pre-arm, so start from a clean slate.
+  // (clear is async in the stub but completes within the idle above.)
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realGet = dnr.getDynamicRules;
+  let release = null;
+  let stallOnce = true;
+  dnr.getDynamicRules = async () => {
+    if (stallOnce) {
+      stallOnce = false;
+      await new Promise((r) => { release = r; });
+    }
+    return realGet.call(dnr);
+  };
+  let alarmReturn;
+  await quiet(async () => {
+    alarmReturn = env.fireAlarm("headerforge:retry");
+    // Synchronous check: pre-arm must have run before the stalled call.
+    assert.ok(
+      env.alarms().includes("headerforge:retry"),
+      "pre-armed alarm must be present before the hung sync settles",
+    );
+    // Handler must return a promise so Chrome keeps the worker alive.
+    assert.ok(
+      alarmReturn && typeof alarmReturn.then === "function",
+      "alarm handler must return its sync promise",
+    );
+    await waitFor(() => release !== null, { label: "alarm sync to stall" });
+    release();
+    await waitFor(() => env.appliedHeaders().length === 0, {
+      label: "alarm-driven paused sync to finish",
+    }).catch(() => {});
+  });
+  assert.deepEqual(env.appliedHeaders(), []);
+});
+
+await test("a transient regex failure is not pinned as invalid", async () => {
+  // Only successful validations are cached. Caching "false" would pin a
+  // cold-boot engine hiccup as "invalid pattern" until restart.
+  const env = makeEnv({ paused: false });
+  env.store["headerforge:v1"] = {
+    ...env.store["headerforge:v1"],
+    profiles: [
+      {
+        ...env.store["headerforge:v1"].profiles[0],
+        urlFilters: [{ id: "f1", enabled: true, pattern: "a\\.com" }],
+      },
+    ],
+  };
+  let calls = 0;
+  const dnr = globalThis.chrome.declarativeNetRequest;
+  const realIsRegex = dnr.isRegexSupported;
+  dnr.isRegexSupported = async () => {
+    if (++calls === 1) throw new Error("engine busy on cold boot");
+    return realIsRegex ? realIsRegex.call(dnr) : { isSupported: true };
+  };
+  await quiet(async () => {
+    await boot(env);
+    await idle(120);
+    await syncViaMessage();
+    await idle(120);
+  });
+  const rules = await globalThis.chrome.declarativeNetRequest.getDynamicRules();
+  assert.ok(
+    rules.length > 0 && rules[0].condition && rules[0].condition.regexFilter === "a\\.com",
+    "second validation must succeed and produce a filtered rule, not a pinned invalid",
+  );
+});
+
+await test("an absent state key syncs once instead of looping on repair", async () => {
+  // Regression for the pre-write freshness check: comparing two independently
+  // normalized states is not a fixed point when nothing is stored (fresh UUIDs
+  // each call), so the repair it triggers looped forever with zero DNR writes.
+  // Raw-to-raw comparison terminates: one sync, one write.
+  const env = makeEnv({ paused: false });
+  delete env.store["headerforge:v1"]; // fresh install before onInstalled seeds
+  await quiet(async () => {
+    await boot(env);
+    await waitFor(() => env.updateCalls() >= 1, { label: "boot sync to write" });
+    await idle(150);
+  });
+  assert.equal(env.updateCalls(), 1, "absent state must produce exactly one DNR write");
+  assert.deepEqual(env.appliedHeaders(), [], "default state applies no headers");
+});
+
+await test("rapid storage writes collapse to one DNR rewrite", async () => {
+  // Popup persists write-through per keystroke for durability; the worker
+  // debounces storage.onChanged so a typing burst does not become one full
+  // remove-all/add-all rewrite per character. Events use BURST_SPACING_MS (real
+  // timers, not the compressed ones) so the test tracks the property
+  // STORAGE_DEBOUNCE_MS > typing cadence asserted above: with e.g. 100ms the
+  // 120ms-spaced burst stops coalescing and fails. The debounced resync nudge
+  // stays the dormant wake-up (storage events are dropped while dormant).
+  const env = await boot(makeEnv({ paused: false }));
+  await waitFor(() => env.appliedHeaders().length === 2, { label: "boot to apply" });
+  await idle(80); // let the boot debounce window fully settle
+  const before = env.updateCalls();
+  for (let i = 0; i < 10; i++) {
+    env.fireStorageChange();
+    await new Promise((r) => realSetTimeout(r, BURST_SPACING_MS));
+  }
+  // Popup's debounced resync nudge arrives just after the burst; without the
+  // message path cancelling the pending storage debounce this tail repeats the
+  // same rewrite (10 chars -> 2 rewrites instead of 1).
+  await syncViaMessage();
+  await waitFor(() => env.updateCalls() >= before + 1, { label: "debounced sync" });
+  await new Promise((r) => realSetTimeout(r, 500));
+  assert.equal(
+    env.updateCalls() - before,
+    1,
+    "burst plus its resync nudge must collapse to one DNR rewrite",
+  );
+});
+
+const EXPECTED = 20;
 assert.equal(passed, EXPECTED, `expected ${EXPECTED} worker tests, ran ${passed}`);
 console.log(`\n${passed} worker tests passed`);

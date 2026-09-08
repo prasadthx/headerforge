@@ -8,6 +8,7 @@ import {
   uniqueProfileName,
   ICON_PATHS,
   RESOLVED_THEME_KEY,
+  RETRY_ALARM,
 } from "./state.js";
 
 const REPO = "https://github.com/prasadthx/headerforge";
@@ -70,10 +71,20 @@ async function save(mutate) {
   state = normalizeState(mutate ? mutate(base) : base);
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
   try {
-    // storage.onChanged is not a reliable wake-up for a dormant MV3 worker.
+    // storage.onChanged is not a reliable wake-up for a dormant MV3 worker
+    // (cold boot / long idle tears it down and drops the event).
     await chrome.runtime.sendMessage({ type: "resync" });
   } catch {
-    /* no receiver; the worker syncs on spin-up */
+    // Message lost (worker still starting, tab closing). Storage is durable;
+    // leave a one-shot alarm so a dormant worker still wakes even though the
+    // event was dropped. Harmless if the worker already synced on spin-up.
+    try {
+      await chrome.alarms?.create?.(RETRY_ALARM, {
+        delayInMinutes: 1,
+      });
+    } catch {
+      /* alarms unavailable; spin-up sync covers us */
+    }
   }
 }
 
