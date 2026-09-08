@@ -17,6 +17,11 @@ export const RESOLVED_THEME_KEY = "headerforge:resolvedTheme";
 // for a retry. Shared by background/popup/options so a rename cannot silently
 // break the backstop (all three must agree).
 export const RETRY_ALARM = "headerforge:retry";
+// Worker-side coalescing for popup write-through storage events: a typing
+// burst must collapse to one DNR rewrite. Must outlast realistic typing
+// cadence (~120ms); shared here so the worker and its test cannot drift apart
+// silently.
+export const STORAGE_DEBOUNCE_MS = 250;
 
 // Bump when the persisted shape changes, and add a matching step in migrate().
 export const SCHEMA_VERSION = 2;

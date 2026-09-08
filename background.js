@@ -10,6 +10,7 @@ import {
   UPDATE_KEY,
   RESOLVED_THEME_KEY,
   RETRY_ALARM,
+  STORAGE_DEBOUNCE_MS,
   ICON_PATHS,
   normalizeState,
   createDefaultState,
@@ -298,7 +299,8 @@ const MAX_SYNC_RETRIES = 3;
 // RETRY_ALARM is shared via state.js so background/popup/options agree. A
 // teardown (or a popup pre-arm on close-mid-edit) can leave it armed with no
 // in-memory record; firing it is a harmless self-limiting redundant sync, and
-// success clears it unconditionally (cheap no-op when absent).
+// success clears it (cheap no-op when absent) unless a repair is queued behind
+// it, which re-arms instead.
 function scheduleDurableRetry() {
   try {
     const r = chrome.alarms.create(RETRY_ALARM, { delayInMinutes: 1 });
@@ -653,11 +655,13 @@ chrome.runtime.onUpdateAvailable.addListener((details) => {
 // setTimeout neither keeps the worker alive nor survives its teardown — the
 // exact hazard the RETRY_ALARM comment above warns about. That is acceptable
 // here because the storage event itself just reset the 30s idle timer (so a
-// reclaim inside this 250ms window is unlikely), and both writers (popup,
-// options) also send the immediate resync message below with the alarm behind
-// it. At worst a dropped debounce delays the sync until that message/alarm.
+// reclaim inside this short debounce window is unlikely), and both writers
+// (popup, options) also send the immediate resync message below with the alarm
+// behind it. At worst a dropped debounce delays the sync until that
+// message/alarm.
 let storageDebounceTimer;
-const STORAGE_DEBOUNCE_MS = 250;
+// STORAGE_DEBOUNCE_MS is shared via state.js so the worker and its test track
+// the same property (debounce must outlast typing cadence), not a literal.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[STORAGE_KEY]) {
     clearTimeout(storageDebounceTimer);

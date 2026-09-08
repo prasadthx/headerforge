@@ -6,6 +6,7 @@
 // dynamic rules persist by design, so anything that stops doSyncRules partway
 // leaves them in force with nothing to take them down.
 import assert from "node:assert/strict";
+import { STORAGE_DEBOUNCE_MS } from "../state.js";
 
 let passed = 0;
 async function test(name, fn) {
@@ -19,15 +20,21 @@ let bust = 0;
 
 // background.js races doSyncRules against a 15s timer. Compress timers so that
 // path is exercisable in a test without waiting on wall clock — except the
-// 250ms storage debounce, which the burst-coalescing test below pins at a
-// realistic typing cadence. Compressing it to 30ms would let the test pass
-// under any debounce >= 1ms and hide a churn regression.
+// storage debounce, which the burst-coalescing test below pins at a realistic
+// typing cadence. Compressing it to 30ms would let the test pass under any
+// debounce >= 1ms and hide a churn regression, so the exemption tracks the
+// shared constant (not a literal) and the test asserts the property below.
+// Realistic inter-keystroke cadence the debounce must outlast.
+const BURST_SPACING_MS = 120;
+assert.ok(
+  STORAGE_DEBOUNCE_MS > BURST_SPACING_MS,
+  `STORAGE_DEBOUNCE_MS (${STORAGE_DEBOUNCE_MS}) must outlast typing cadence (${BURST_SPACING_MS})`,
+);
 const realSetTimeout = globalThis.setTimeout;
-const STORAGE_DEBOUNCE_MS_FOR_TEST = 250;
 globalThis.setTimeout = (fn, ms, ...rest) =>
   realSetTimeout(
     fn,
-    ms === STORAGE_DEBOUNCE_MS_FOR_TEST
+    ms === STORAGE_DEBOUNCE_MS
       ? ms
       : Math.min(typeof ms === "number" ? ms : 0, 30),
     ...rest,
@@ -666,18 +673,18 @@ await test("an absent state key syncs once instead of looping on repair", async 
 await test("rapid storage writes collapse to one DNR rewrite", async () => {
   // Popup persists write-through per keystroke for durability; the worker
   // debounces storage.onChanged so a typing burst does not become one full
-  // remove-all/add-all rewrite per character. Events are spaced at a realistic
-  // typing cadence (real timers, not the compressed ones) so the test pins the
-  // 250ms debounce value: dropping it to ~10ms would stop coalescing here and
-  // fail. The debounced resync nudge stays the dormant wake-up (storage events
-  // are dropped while dormant).
+  // remove-all/add-all rewrite per character. Events use BURST_SPACING_MS (real
+  // timers, not the compressed ones) so the test tracks the property
+  // STORAGE_DEBOUNCE_MS > typing cadence asserted above: with e.g. 100ms the
+  // 120ms-spaced burst stops coalescing and fails. The debounced resync nudge
+  // stays the dormant wake-up (storage events are dropped while dormant).
   const env = await boot(makeEnv({ paused: false }));
   await waitFor(() => env.appliedHeaders().length === 2, { label: "boot to apply" });
   await idle(80); // let the boot debounce window fully settle
   const before = env.updateCalls();
   for (let i = 0; i < 10; i++) {
     env.fireStorageChange();
-    await new Promise((r) => realSetTimeout(r, 20));
+    await new Promise((r) => realSetTimeout(r, BURST_SPACING_MS));
   }
   // Popup's debounced resync nudge arrives just after the burst; without the
   // message path cancelling the pending storage debounce this tail repeats the
